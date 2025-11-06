@@ -18,6 +18,17 @@ __pycache__/
 # Chrome profile directory (contains browser session data)
 whatsapp_chrome_profile/
 
+# Useless/redundant files
+whatsapp_retarget_saudi.py
+test_message.py
+send_to_saudi_customers.py
+example_usage.py
+example_with_media.py
+AI_SETUP.md
+HOW_IT_WORKS.md
+MEDIA_GUIDE.md
+ORIGINAL_PLAN.md
+
 # IDE
 .vscode/
 .idea/
