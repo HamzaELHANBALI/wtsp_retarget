@@ -435,36 +435,75 @@ Keep responses concise and helpful."""
                 if not photos_clicked:
                     print("⚠️  Could not find 'Photos & Videos' button, trying direct file input")
 
-            # Find file input
+            # Find file input - IMPORTANT: Wait longer for Finder to open and file input to be ready
             print("📂 Looking for file input...")
-            time.sleep(1)
+            time.sleep(2)  # Increased wait for file picker to fully load
 
             # Try to find the file input (it appears after clicking attach or Photos & Videos)
+            # For videos, we want the file input that accepts video files
             file_input_selectors = [
-                "input[type='file'][accept*='image']",
-                "input[type='file'][accept*='video']",
-                "input[type='file']"
+                "input[type='file'][accept*='video']",  # Video input first
+                "input[type='file'][accept*='image']",  # Then image input
+                "input[type='file']"  # Finally any file input
             ]
 
             file_input = None
             for selector in file_input_selectors:
                 try:
                     inputs = self.driver.find_elements(By.CSS_SELECTOR, selector)
-                    # Get the last one (usually the most recently added)
                     if inputs:
-                        file_input = inputs[-1]
-                        break
+                        # Get ALL file inputs and find the one that's most likely to be the right one
+                        for inp in reversed(inputs):  # Check from last to first (newest first)
+                            try:
+                                # Check if input is attached to DOM and not hidden
+                                if inp.is_enabled():
+                                    file_input = inp
+                                    print(f"✅ Found file input: {selector}")
+                                    break
+                            except:
+                                continue
+                        if file_input:
+                            break
                 except:
                     continue
 
             if not file_input:
-                file_input = self.wait.until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='file']"))
-                )
+                # Last resort: wait for any file input to appear
+                try:
+                    file_input = self.wait.until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='file']"))
+                    )
+                    print("✅ Found file input (fallback)")
+                except:
+                    raise Exception("Could not find file input element")
 
-            # Send file
-            file_input.send_keys(abs_path)
-            print(f"✅ File uploaded: {Path(media_path).name}")
+            # Send file path to input
+            # This should close Finder and upload the file
+            print(f"📤 Uploading file: {Path(media_path).name}")
+            try:
+                file_input.send_keys(abs_path)
+                print(f"✅ File path sent to input")
+
+                # Wait a moment for Finder to close
+                time.sleep(2)
+
+                # Verify upload started by checking if Finder closed and preview appeared
+                preview_exists = self.driver.execute_script("""
+                    // Check if media preview/editor is visible
+                    const preview = document.querySelector('[data-animate-media-viewer]') ||
+                                   document.querySelector('[data-testid="media-viewer"]') ||
+                                   document.querySelector('div[role="dialog"]');
+                    return preview !== null;
+                """)
+
+                if preview_exists:
+                    print(f"✅ File upload started (preview visible)")
+                else:
+                    print(f"⚠️  Could not verify upload preview, continuing anyway...")
+
+            except Exception as e:
+                print(f"⚠️  Error sending file path: {e}")
+                raise
 
             print("⏳ Uploading media...")
             time.sleep(4)  # Wait for upload
