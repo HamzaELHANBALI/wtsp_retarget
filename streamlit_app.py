@@ -217,7 +217,7 @@ with tab1:
         # Test Message Section (at the top)
         st.markdown("### 🧪 Test Message (Recommended Before Bulk Sending)")
 
-        with st.expander("📱 Send Test Message to One Number", expanded=False):
+        with st.expander("📱 Send Test Message to One Number", expanded=True):
             st.info("💡 **Tip:** Always test with your own number first to verify everything works!")
 
             test_col1, test_col2 = st.columns([1, 1])
