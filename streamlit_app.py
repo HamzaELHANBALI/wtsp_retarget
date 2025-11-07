@@ -3,6 +3,7 @@ import pandas as pd
 import time
 import os
 import re
+import shutil
 from pathlib import Path
 from datetime import datetime
 import threading
@@ -166,9 +167,21 @@ Keep responses concise and helpful. Always be polite and friendly.""",
     # Login Section
     st.header("🔐 WhatsApp Login")
 
+    # Check if saved session exists
+    profile_dir = Path("whatsapp_profile")
+    has_saved_session = profile_dir.exists() and any(profile_dir.iterdir())
+
     if not st.session_state.logged_in:
+        # Show session status
+        if has_saved_session:
+            st.info("💾 Saved WhatsApp session detected!")
+            st.caption("You won't need to scan QR code again - click below to reconnect")
+        else:
+            st.caption("First time? You'll need to scan a QR code with your phone")
+
         if st.button("🚀 Initialize Bot & Login", type="primary"):
-            with st.spinner("Initializing bot... Please wait for QR code"):
+            spinner_text = "Reconnecting to saved session..." if has_saved_session else "Initializing bot... Please wait for QR code"
+            with st.spinner(spinner_text):
                 try:
                     # Initialize bot
                     st.session_state.bot = WhatsAppBot(
@@ -177,13 +190,16 @@ Keep responses concise and helpful. Always be polite and friendly.""",
                         headless=False
                     )
                     st.session_state.logged_in = True
-                    st.success("✅ Bot initialized! You should see WhatsApp Web in a browser window.")
-                    st.info("📱 Scan the QR code with your phone to login")
+                    success_msg = "✅ Bot reconnected! Check the browser window." if has_saved_session else "✅ Bot initialized! You should see WhatsApp Web in a browser window."
+                    st.success(success_msg)
+                    if not has_saved_session:
+                        st.info("📱 Scan the QR code with your phone to login")
                     st.rerun()
                 except Exception as e:
                     st.error(f"❌ Failed to initialize bot: {str(e)}")
     else:
         st.success("✅ Bot is active")
+        st.caption("🔄 If you refresh the page, just click 'Initialize Bot' again - your session is saved!")
         if st.button("🔌 Disconnect", type="secondary"):
             if st.session_state.bot:
                 st.session_state.bot.close()
@@ -191,6 +207,15 @@ Keep responses concise and helpful. Always be polite and friendly.""",
             st.session_state.logged_in = False
             st.session_state.monitoring = False
             st.rerun()
+
+        # Option to clear saved session
+        with st.expander("🗑️ Clear Saved Session"):
+            st.warning("⚠️ This will delete your saved WhatsApp session. You'll need to scan QR code again next time.")
+            if st.button("Clear Session Data", type="secondary"):
+                if profile_dir.exists():
+                    shutil.rmtree(profile_dir)
+                    st.success("✅ Session data cleared. You'll need to scan QR code on next login.")
+                    st.info("💡 Tip: Disconnect and reconnect to start fresh.")
 
     st.divider()
 
