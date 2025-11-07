@@ -1,0 +1,19 @@
+[server]
+# Increase max upload size to 500MB (in MB)
+maxUploadSize = 500
+
+# Enable CORS for local development
+enableCORS = false
+enableXsrfProtection = true
+
+[browser]
+# Gather usage stats
+gatherUsageStats = false
+
+[theme]
+# WhatsApp-inspired colors
+primaryColor = "#25D366"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F0F2F5"
+textColor = "#111111"
+font = "sans serif"

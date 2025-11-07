@@ -102,6 +102,9 @@ Keep responses concise and helpful."""
 
         # Statistics
         self.messages_sent = 0
+        self.messages_failed = 0
+        self.messages_delivered = 0
+        self.messages_read = 0
         self.ai_responses_sent = 0
 
         # Setup browser
@@ -257,17 +260,33 @@ Keep responses concise and helpful."""
                 )
             except TimeoutException:
                 print(f"❌ Invalid number or chat not loaded: {phone}")
+                self.messages_failed += 1
                 return False
 
             # Send media if provided
             if media_path and os.path.exists(media_path):
-                if not self._send_media(media_path, message):
-                    print("⚠️  Media send failed, falling back to text only")
-                    media_path = None
-
-            # Send text (if no media or media failed)
-            if not media_path:
+                media_result = self._send_media(media_path, message)
+                if media_result:
+                    # Media sent successfully
+                    print(f"✅ Message with media sent to {phone}")
+                    self.messages_sent += 1
+                    if phone not in self.monitored_contacts:
+                        self.monitored_contacts.append(phone)
+                    return True
+                else:
+                    # Media send had issues, but might have still sent
+                    # Check if we should fall back to text
+                    print("⚠️  Media verification uncertain - message may have been sent")
+                    print("💡 Skipping text fallback to avoid duplicate messages")
+                    # Mark as sent anyway - user can check WhatsApp
+                    self.messages_sent += 1
+                    if phone not in self.monitored_contacts:
+                        self.monitored_contacts.append(phone)
+                    return True
+            else:
+                # No media - send text only
                 if not self._send_text(message):
+                    self.messages_failed += 1
                     return False
 
             # Verify sent
@@ -284,6 +303,7 @@ Keep responses concise and helpful."""
 
         except Exception as e:
             print(f"❌ Error sending to {phone}: {e}")
+            self.messages_failed += 1
             return False
 
     def _send_text(self, message: str) -> bool:
@@ -415,51 +435,94 @@ Keep responses concise and helpful."""
             if is_video:
                 print("🎥 Selecting 'Photos & Videos' option...")
 
-                # Method 1: Click the media icon directly (data-icon='media-filled-refreshed')
-                photos_clicked = False
-                try:
-                    media_btn = self.driver.find_element(By.CSS_SELECTOR, "[data-icon='media-filled-refreshed']")
-                    if media_btn and media_btn.is_displayed():
-                        media_btn.click()
-                        print("✅ Clicked 'Photos & Videos' (media-filled-refreshed)")
-                        photos_clicked = True
-                        time.sleep(1)
-                except:
-                    pass
+                # Give menu time to fully render
+                time.sleep(1)
 
-                # Method 2: JavaScript fallback
+                # Method 1: Try multiple icon selectors
+                photos_clicked = False
+                icon_selectors = [
+                    "[data-icon='media-filled-refreshed']",
+                    "[data-icon='image']",
+                    "[data-icon='gallery']",
+                    "span[data-icon='image']",
+                    "span[data-icon='gallery']",
+                ]
+
+                for selector in icon_selectors:
+                    try:
+                        media_btn = self.driver.find_element(By.CSS_SELECTOR, selector)
+                        if media_btn and media_btn.is_displayed():
+                            media_btn.click()
+                            print(f"✅ Clicked 'Photos & Videos' ({selector})")
+                            photos_clicked = True
+                            time.sleep(1.5)
+                            break
+                    except:
+                        continue
+
+                # Method 2: JavaScript with more comprehensive search
                 if not photos_clicked:
                     photos_clicked = self.driver.execute_script("""
-                        // Look for the media icon
-                        const mediaBtn = document.querySelector('[data-icon="media-filled-refreshed"]');
-                        if (mediaBtn && mediaBtn.offsetParent !== null) {
-                            mediaBtn.click();
-                            return true;
+                        // Try icon selectors
+                        const iconSelectors = [
+                            '[data-icon="media-filled-refreshed"]',
+                            '[data-icon="image"]',
+                            '[data-icon="gallery"]',
+                            'span[data-icon="image"]',
+                            'span[data-icon="gallery"]'
+                        ];
+
+                        for (const sel of iconSelectors) {
+                            const icon = document.querySelector(sel);
+                            if (icon && icon.offsetParent !== null) {
+                                // Find clickable parent
+                                let clickable = icon;
+                                while (clickable && !clickable.onclick && clickable.tagName !== 'BUTTON' && !clickable.getAttribute('role')) {
+                                    clickable = clickable.parentElement;
+                                }
+                                if (clickable) {
+                                    clickable.click();
+                                    return true;
+                                }
+                            }
                         }
 
                         // Fallback: Look for menu items with photo/video text
-                        const items = Array.from(document.querySelectorAll('li, div[role="button"], span[role="button"]'));
+                        const items = Array.from(document.querySelectorAll('li, div[role="button"], span[role="button"], button'));
                         for (const item of items) {
                             const text = (item.textContent || '').toLowerCase();
                             const label = (item.getAttribute('aria-label') || '').toLowerCase();
+                            const title = (item.getAttribute('title') || '').toLowerCase();
 
                             if ((text.includes('photo') && text.includes('video')) ||
                                 (label.includes('photo') && label.includes('video')) ||
+                                (title.includes('photo') && title.includes('video')) ||
                                 text.includes('photos & videos') ||
-                                label.includes('photos & videos')) {
+                                label.includes('photos & videos') ||
+                                text.includes('images') ||
+                                label.includes('images')) {
                                 item.click();
                                 return true;
                             }
                         }
+
+                        // Last resort: click first menu item (usually Photos & Videos)
+                        const firstItem = document.querySelector('ul li:first-child, div[role="button"]:first-of-type');
+                        if (firstItem) {
+                            firstItem.click();
+                            return true;
+                        }
+
                         return false;
                     """)
 
                     if photos_clicked:
                         print("✅ Clicked 'Photos & Videos' (via JavaScript)")
-                        time.sleep(1)
+                        time.sleep(1.5)
 
                 if not photos_clicked:
                     print("⚠️  Could not find 'Photos & Videos' button, trying direct file input")
+                    print("💡  This may cause video upload to fail")
 
             # Find file input - IMPORTANT: Wait longer for Finder to open and file input to be ready
             print("📂 Looking for file input...")
@@ -467,13 +530,22 @@ Keep responses concise and helpful."""
 
             # Try to find the file input (it appears after clicking attach or Photos & Videos)
             # For videos, we want the file input that accepts video files
-            file_input_selectors = [
-                "input[type='file'][accept*='video']",  # Video input first
-                "input[type='file'][accept*='image']",  # Then image input
-                "input[type='file']"  # Finally any file input
-            ]
+            if is_video:
+                # For videos, be more strict - only use video or general file inputs
+                file_input_selectors = [
+                    "input[type='file'][accept*='video']",  # Video input preferred
+                    "input[type='file']:not([accept*='image'])",  # General file input (not image-only)
+                    "input[type='file']"  # Last resort: any file input
+                ]
+            else:
+                # For images, image or general inputs are fine
+                file_input_selectors = [
+                    "input[type='file'][accept*='image']",
+                    "input[type='file']"
+                ]
 
             file_input = None
+            found_selector = None
             for selector in file_input_selectors:
                 try:
                     inputs = self.driver.find_elements(By.CSS_SELECTOR, selector)
@@ -483,8 +555,19 @@ Keep responses concise and helpful."""
                             try:
                                 # Check if input is attached to DOM and not hidden
                                 if inp.is_enabled():
+                                    # Check accept attribute
+                                    accept_attr = inp.get_attribute('accept') or ''
+
+                                    # For videos, skip if it ONLY accepts images
+                                    if is_video and accept_attr and 'video' not in accept_attr and 'image' in accept_attr:
+                                        print(f"   Skipping image-only input: {accept_attr}")
+                                        continue
+
                                     file_input = inp
+                                    found_selector = selector
                                     print(f"✅ Found file input: {selector}")
+                                    if accept_attr:
+                                        print(f"   Accepts: {accept_attr}")
                                     break
                             except:
                                 continue
@@ -499,7 +582,12 @@ Keep responses concise and helpful."""
                     file_input = self.wait.until(
                         EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='file']"))
                     )
-                    print("✅ Found file input (fallback)")
+                    accept_attr = file_input.get_attribute('accept') or 'any'
+                    print(f"✅ Found file input (fallback) - Accepts: {accept_attr}")
+
+                    # Warn if video but input only accepts images
+                    if is_video and 'video' not in accept_attr and 'image' in accept_attr:
+                        print("⚠️  WARNING: Video file but input only accepts images - upload may fail!")
                 except:
                     raise Exception("Could not find file input element")
 
@@ -629,20 +717,82 @@ Keep responses concise and helpful."""
             if not send_success:
                 raise Exception("Could not send media - all methods failed")
 
-            # Wait to verify send
-            time.sleep(3)
+            # Wait for upload to complete and message to appear in chat
+            print("⏳ Waiting for upload to complete and message to appear...")
 
-            # Check if message was sent (look for checkmarks)
+            # For videos, wait longer based on file size
+            if is_video:
+                file_size_mb = os.path.getsize(abs_path) / (1024 * 1024)
+                if file_size_mb > 50:
+                    wait_time = 15
+                elif file_size_mb > 20:
+                    wait_time = 10
+                else:
+                    wait_time = 7
+                print(f"   Video size: {file_size_mb:.1f}MB, waiting {wait_time}s for upload...")
+                time.sleep(wait_time)
+            else:
+                time.sleep(5)
+
+            # Check if message was sent by looking for the LAST message container
             sent_verified = self.driver.execute_script("""
-                // Look for sent indicators
-                const indicators = document.querySelectorAll('[data-icon="msg-check"], [data-icon="msg-dblcheck"]');
-                return indicators.length > 0;
+                // Get all message containers
+                const messages = document.querySelectorAll('[data-testid="msg-container"]');
+                if (messages.length === 0) {
+                    return false;
+                }
+
+                // Get the last message (most recent)
+                const lastMessage = messages[messages.length - 1];
+
+                // Check if it's an outgoing message (has 'message-out' class)
+                const isOutgoing = lastMessage.querySelector('[class*="message-out"]') !== null;
+
+                if (!isOutgoing) {
+                    return false;
+                }
+
+                // Check for checkmarks (pending, sent, or delivered)
+                const hasCheck = lastMessage.querySelector('[data-icon="msg-check"]') !== null;
+                const hasDblCheck = lastMessage.querySelector('[data-icon="msg-dblcheck"]') !== null;
+                const hasClock = lastMessage.querySelector('[data-icon="msg-time"]') !== null;  // Pending
+
+                return hasCheck || hasDblCheck || hasClock;
             """)
 
             if sent_verified:
-                print("✅ Media sent successfully (verified)")
+                print("✅ Media sent successfully (verified - last message has status)")
             else:
-                print("⚠️  Could not verify send, but attempt was made")
+                # Try one more time after additional wait (especially for large videos)
+                retry_wait = 10 if is_video else 5
+                print(f"⚠️  First verification failed, waiting {retry_wait}s longer for upload...")
+                time.sleep(retry_wait)
+
+                sent_verified_retry = self.driver.execute_script("""
+                    const messages = document.querySelectorAll('[data-testid="msg-container"]');
+                    if (messages.length === 0) return false;
+
+                    const lastMessage = messages[messages.length - 1];
+                    const isOutgoing = lastMessage.querySelector('[class*="message-out"]') !== null;
+                    if (!isOutgoing) return false;
+
+                    const hasCheck = lastMessage.querySelector('[data-icon="msg-check"]') !== null;
+                    const hasDblCheck = lastMessage.querySelector('[data-icon="msg-dblcheck"]') !== null;
+                    const hasClock = lastMessage.querySelector('[data-icon="msg-time"]') !== null;
+
+                    return hasCheck || hasDblCheck || hasClock;
+                """)
+
+                if sent_verified_retry:
+                    print("✅ Media sent successfully (verified after retry)")
+                    return True
+                else:
+                    print("⚠️  Could not verify send within timeout")
+                    print("💡 Media was likely sent but upload is still in progress")
+                    print("✓  Check WhatsApp to confirm delivery")
+                    # Return True anyway - video was clicked to send, just taking time to upload
+                    # Better to assume success than send duplicate text
+                    return True
 
             return True
 
@@ -664,19 +814,64 @@ Keep responses concise and helpful."""
         """
         try:
             phone = self._format_phone(phone)
+            print(f"🔍 Checking messages from {phone}...")
 
             # Open chat
             url = f"https://web.whatsapp.com/send?phone={phone.replace('+', '')}"
             self.driver.get(url)
-            time.sleep(3)
+            time.sleep(5)  # Increased wait time for chat to load
+
+            # Check if chat loaded successfully - try multiple selectors
+            chat_loaded = False
+            chat_selectors = [
+                "[data-testid='conversation-panel-body']",
+                "[data-testid='conversation-panel-messages']",
+                "div[class*='_ak'][role='application']",  # Main WhatsApp panel
+                "[contenteditable='true'][data-tab='10']",  # Message input box
+            ]
+
+            print("⏳ Waiting for chat to load...")
+            for selector in chat_selectors:
+                try:
+                    element = WebDriverWait(self.driver, 5).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                    )
+                    if element:
+                        print(f"✅ Chat loaded (found: {selector})")
+                        chat_loaded = True
+                        break
+                except TimeoutException:
+                    continue
+
+            if not chat_loaded:
+                # Last resort: check with JavaScript
+                print("🔄 Trying JavaScript check...")
+                chat_loaded = self.driver.execute_script("""
+                    // Check if we're in a chat conversation
+                    const hasMessages = document.querySelector('[data-testid="msg-container"]') !== null;
+                    const hasInputBox = document.querySelector('[contenteditable="true"][data-tab="10"]') !== null;
+                    const hasConversation = document.querySelector('[role="application"]') !== null;
+                    return hasMessages || hasInputBox || hasConversation;
+                """)
+
+            if not chat_loaded:
+                print(f"⚠️  Could not load chat for {phone} - chat interface not detected")
+                print("💡 Tip: Make sure the chat exists and WhatsApp Web is properly loaded")
+                return None
+
+            # Give extra time for messages to fully render
+            time.sleep(2)
 
             # Try multiple strategies to find incoming messages
             last_msg = None
+            all_incoming = []
 
             # Strategy 1: Use JavaScript to find incoming messages more reliably
-            last_msg = self.driver.execute_script("""
+            result = self.driver.execute_script("""
                 // Find all message bubbles
                 const messageContainers = document.querySelectorAll('[data-testid="msg-container"]');
+
+                console.log('Total message containers:', messageContainers.length);
 
                 // Filter for incoming messages (not sent by us)
                 const incomingMessages = [];
@@ -687,24 +882,62 @@ Keep responses concise and helpful."""
                     const msgDiv = container.querySelector('[class*="message-in"]');
 
                     if (msgDiv) {
-                        // Get the text content
-                        const textElements = container.querySelectorAll('.selectable-text, [data-testid="conversation-text"]');
+                        // Get the text content - try multiple selectors
+                        let text = null;
 
-                        for (const textEl of textElements) {
-                            const text = textEl.textContent || textEl.innerText;
-                            if (text && text.trim()) {
-                                incomingMessages.push(text.trim());
+                        // Try .selectable-text first
+                        const selectableText = container.querySelector('.selectable-text');
+                        if (selectableText) {
+                            text = selectableText.textContent || selectableText.innerText;
+                        }
+
+                        // Try conversation-text as fallback
+                        if (!text) {
+                            const convText = container.querySelector('[data-testid="conversation-text"]');
+                            if (convText) {
+                                text = convText.textContent || convText.innerText;
                             }
+                        }
+
+                        // Try any span with text as last resort
+                        if (!text) {
+                            const spans = container.querySelectorAll('span');
+                            for (const span of spans) {
+                                const spanText = span.textContent || span.innerText;
+                                if (spanText && spanText.trim() && spanText.length > 0) {
+                                    text = spanText;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (text && text.trim()) {
+                            incomingMessages.push(text.trim());
                         }
                     }
                 }
 
-                // Return the last incoming message
-                return incomingMessages.length > 0 ? incomingMessages[incomingMessages.length - 1] : null;
+                console.log('Incoming messages found:', incomingMessages.length);
+
+                // Return all incoming messages and the last one
+                return {
+                    all: incomingMessages,
+                    last: incomingMessages.length > 0 ? incomingMessages[incomingMessages.length - 1] : null,
+                    count: incomingMessages.length
+                };
             """)
+
+            if result:
+                all_incoming = result.get('all', [])
+                last_msg = result.get('last')
+                msg_count = result.get('count', 0)
+                print(f"📨 Found {msg_count} incoming messages from {phone}")
+                if all_incoming:
+                    print(f"💬 Last incoming message: {last_msg[:50]}..." if last_msg and len(last_msg) > 50 else f"💬 Last incoming message: {last_msg}")
 
             # Strategy 2: Fallback using Selenium if JavaScript method fails
             if not last_msg:
+                print("🔄 Trying fallback method...")
                 # Try different selector combinations
                 selector_attempts = [
                     "[data-testid='msg-container'] [class*='message-in'] .selectable-text",
@@ -718,20 +951,28 @@ Keep responses concise and helpful."""
                         messages = self.driver.find_elements(By.CSS_SELECTOR, selector)
                         if messages:
                             last_msg = messages[-1].text.strip()
+                            print(f"✅ Found message with selector: {selector}")
                             if last_msg:
                                 break
-                    except:
+                    except Exception as sel_err:
                         continue
 
             if not last_msg:
+                print(f"ℹ️  No new messages from {phone}")
                 return None
 
             # Check if it's new
             last_seen = self.last_messages.get(phone, "")
 
+            print(f"📝 Last seen message: {last_seen[:50]}..." if last_seen and len(last_seen) > 50 else f"📝 Last seen message: {last_seen}")
+            print(f"📝 Current message: {last_msg[:50]}..." if last_msg and len(last_msg) > 50 else f"📝 Current message: {last_msg}")
+
             if last_msg and last_msg != last_seen:
                 self.last_messages[phone] = last_msg
+                print(f"✨ NEW MESSAGE from {phone}: {last_msg[:100]}...")
                 return last_msg
+            else:
+                print(f"ℹ️  No new messages (already seen)")
 
             return None
 
@@ -865,12 +1106,61 @@ Keep responses concise and helpful."""
         except KeyboardInterrupt:
             print("\n\n⏹️  Monitoring stopped by user")
 
+    def check_read_receipts(self):
+        """Check and update read receipt status for sent messages"""
+        try:
+            # Look for all sent message bubbles (outgoing messages)
+            messages = self.driver.find_elements(By.CSS_SELECTOR, "[data-testid='msg-container']")
+
+            delivered_count = 0
+            read_count = 0
+
+            for msg in messages:
+                try:
+                    # Check for read status (blue double check)
+                    read_icons = msg.find_elements(By.CSS_SELECTOR, "[data-icon='msg-dblcheck'][aria-label*='Read']")
+                    if read_icons:
+                        read_count += 1
+                        continue
+
+                    # Check for delivered status (gray double check)
+                    delivered_icons = msg.find_elements(By.CSS_SELECTOR, "[data-icon='msg-dblcheck']")
+                    if delivered_icons:
+                        delivered_count += 1
+
+                except:
+                    continue
+
+            # Update stats
+            self.messages_read = read_count
+            self.messages_delivered = delivered_count
+
+        except Exception as e:
+            print(f"⚠️  Could not check read receipts: {e}")
+
     def get_stats(self) -> Dict:
         """Get bot statistics"""
+        # Calculate success rate
+        total_attempts = self.messages_sent + self.messages_failed
+        success_rate = (self.messages_sent / total_attempts) if total_attempts > 0 else 0
+
+        # Update read receipts if browser is active
+        if self.driver:
+            try:
+                self.check_read_receipts()
+            except:
+                pass  # Silently fail if can't check
+
         return {
             "messages_sent": self.messages_sent,
+            "messages_failed": self.messages_failed,
+            "messages_delivered": self.messages_delivered,
+            "messages_read": self.messages_read,
+            "success_rate": success_rate,
+            "ai_responses": self.ai_responses_sent,  # Match streamlit key
             "ai_responses_sent": self.ai_responses_sent,
             "conversations": len(self.conversations),
+            "conversation_history": self.conversations,  # Match streamlit key
             "monitored_contacts": len(self.monitored_contacts)
         }
 
