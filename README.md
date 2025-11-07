@@ -30,6 +30,7 @@ The app will open in your browser at `http://localhost:8501`
 
 ### UI Features
 
+- **🧪 Test Message**: Send a test message to one number before bulk sending (NEW!)
 - **📤 CSV Upload**: Drag and drop your contacts CSV file
 - **✏️ Message Composer**: Write messages with variables (`{name}`, `{phone}`, `{custom_message}`)
 - **📎 Media Attachments**: Upload images and videos directly through the UI
@@ -82,11 +83,37 @@ python clean_order_csv.py "your_orders.csv"
 
 See the [CSV Cleaning Guide](CSV_CLEANING_GUIDE.md) for detailed documentation.
 
+### 🧪 Test Before Bulk Sending (NEW!)
+
+Before sending to hundreds of contacts, always test first!
+
+**How to test:**
+1. In the **Bulk Messaging** tab, expand the **"Send Test Message to One Number"** section
+2. Enter your own phone number (or any test number)
+3. Write a test message (you can use {name} variables)
+4. Optionally attach media to test image/video sending
+5. Click **"Send Test Message"**
+6. Check your WhatsApp to verify it works!
+
+**Why test first:**
+- ✅ Verify your message looks good
+- ✅ Test media attachments
+- ✅ Check variables are working ({name}, etc.)
+- ✅ Confirm formatting and emojis render correctly
+- ✅ Make sure you're logged in and connected
+
+**Pro tip:** Send the test to your own number so you can see exactly what your customers will receive!
+
 ### UI Screenshots
 
 The Streamlit UI includes:
 1. **Sidebar Configuration**: Set API keys, country codes, delays, and login status
-2. **Bulk Messaging Tab**: Upload CSV (standard or e-commerce), compose messages, attach media, and send
+2. **Bulk Messaging Tab**:
+   - Test message section (send to one number first)
+   - CSV upload (standard or e-commerce format)
+   - Message composer with variables
+   - Media attachments
+   - Real-time bulk sending with progress
 3. **AI Auto-Responder Tab**: Select contacts to monitor and view live conversations
 4. **Analytics Tab**: View detailed statistics and success rates
 5. **Help Tab**: Complete documentation within the app

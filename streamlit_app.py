@@ -200,6 +200,101 @@ with tab1:
     if not st.session_state.logged_in:
         st.warning("⚠️ Please initialize the bot and login to WhatsApp first (see sidebar)")
     else:
+        # Test Message Section (at the top)
+        st.markdown("### 🧪 Test Message (Recommended Before Bulk Sending)")
+
+        with st.expander("📱 Send Test Message to One Number", expanded=False):
+            st.info("💡 **Tip:** Always test with your own number first to verify everything works!")
+
+            test_col1, test_col2 = st.columns([1, 1])
+
+            with test_col1:
+                test_phone = st.text_input(
+                    "Phone Number",
+                    placeholder="+966501234567 or 0501234567",
+                    help="Enter a phone number to test. Can be your own number.",
+                    key="test_phone"
+                )
+
+                test_name = st.text_input(
+                    "Name (for testing {name} variable)",
+                    value="Test User",
+                    help="This will be used for the {name} variable in your message",
+                    key="test_name"
+                )
+
+                test_message = st.text_area(
+                    "Test Message",
+                    value="Hello {name}! 👋\n\nThis is a test message from WhatsApp Bot.\n\nIf you receive this, everything is working perfectly! ✅",
+                    height=150,
+                    help="Write your test message. Use {name} to personalize.",
+                    key="test_message"
+                )
+
+            with test_col2:
+                test_media = st.file_uploader(
+                    "📎 Attach Media (Optional)",
+                    type=['jpg', 'jpeg', 'png', 'gif', 'mp4', 'avi', 'mov'],
+                    help="Upload an image or video to test media sending",
+                    key="test_media"
+                )
+
+                # Save uploaded test media
+                test_media_path = None
+                if test_media is not None:
+                    temp_dir = Path("temp_media")
+                    temp_dir.mkdir(exist_ok=True)
+                    test_media_path = temp_dir / f"test_{test_media.name}"
+                    with open(test_media_path, "wb") as f:
+                        f.write(test_media.getbuffer())
+                    st.success(f"✅ Media ready: {test_media.name}")
+
+                # Preview
+                st.markdown("**Message Preview:**")
+                preview_msg = parse_message_template(test_message, test_name, test_phone, "")
+                st.text_area("Preview", value=preview_msg, height=120, disabled=True, key="test_preview")
+
+            # Send test button
+            if st.button("🚀 Send Test Message", type="primary", key="send_test"):
+                if not test_phone:
+                    st.error("❌ Please enter a phone number")
+                else:
+                    # Validate and format phone number
+                    formatted_phone = format_phone_number(test_phone, country_code)
+
+                    if not formatted_phone:
+                        st.error(f"❌ Invalid phone number: {test_phone}")
+                        st.info("Try formats like: +966501234567, 0501234567, or 966501234567")
+                    else:
+                        st.info(f"📤 Sending test message to {formatted_phone}...")
+
+                        try:
+                            # Parse message with variables
+                            final_message = parse_message_template(test_message, test_name, formatted_phone, "")
+
+                            # Send message
+                            success = st.session_state.bot.send_message(
+                                phone=formatted_phone,
+                                message=final_message,
+                                media_path=str(test_media_path) if test_media_path else None
+                            )
+
+                            if success:
+                                st.success(f"✅ Test message sent successfully to {formatted_phone}!")
+                                st.balloons()
+                                st.info("📱 Check your WhatsApp to verify the message was received correctly.")
+                            else:
+                                st.error("❌ Failed to send test message. Check the browser window for errors.")
+                                st.warning("Common issues:\n- Phone number not on WhatsApp\n- Not logged in\n- Internet connection")
+
+                        except Exception as e:
+                            st.error(f"❌ Error sending test message: {str(e)}")
+                            import traceback
+                            st.code(traceback.format_exc())
+
+        st.divider()
+
+        # Bulk Messaging Section
         col1, col2 = st.columns([1, 1])
 
         with col1:
