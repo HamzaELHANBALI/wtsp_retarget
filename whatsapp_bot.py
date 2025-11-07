@@ -345,6 +345,25 @@ Keep responses concise and helpful."""
         try:
             print(f"📎 Attaching media: {Path(media_path).name}")
 
+            # CRITICAL: Ensure window is visible and focused
+            # File uploads don't work reliably when window is minimized/background
+            print("🔍 Ensuring browser window is visible and focused...")
+            try:
+                # Maximize window (brings it to front)
+                self.driver.maximize_window()
+
+                # Switch to WhatsApp tab if not already active
+                self.driver.switch_to.window(self.driver.current_window_handle)
+
+                # Bring window to front using JavaScript (platform-independent)
+                self.driver.execute_script("window.focus();")
+
+                time.sleep(0.5)  # Brief pause for window manager
+                print("✅ Window focused and ready")
+            except Exception as focus_err:
+                print(f"⚠️  Could not focus window: {focus_err}")
+                print("   File upload may fail if browser is minimized")
+
             # Get absolute path
             abs_path = str(Path(media_path).absolute())
 
@@ -864,6 +883,13 @@ Keep responses concise and helpful."""
         try:
             phone = self._format_phone(phone)
             print(f"🔍 Checking messages from {phone}...")
+
+            # Ensure window is visible (message detection can fail when minimized)
+            try:
+                self.driver.maximize_window()
+                self.driver.execute_script("window.focus();")
+            except:
+                pass  # Not critical for message checking
 
             # Open chat
             url = f"https://web.whatsapp.com/send?phone={phone.replace('+', '')}"
