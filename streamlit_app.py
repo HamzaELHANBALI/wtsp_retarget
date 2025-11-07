@@ -74,6 +74,8 @@ if 'monitoring' not in st.session_state:
     st.session_state.monitoring = False
 if 'conversation_history' not in st.session_state:
     st.session_state.conversation_history = []
+if 'monitored_contacts' not in st.session_state:
+    st.session_state.monitored_contacts = []
 
 # Helper functions
 def validate_phone_number(phone):
@@ -270,6 +272,17 @@ with tab1:
                     key="test_message"
                 )
 
+                # Option to add to monitoring
+                if openai_api_key:
+                    test_monitor = st.checkbox(
+                        "🤖 Also add to AI monitoring",
+                        value=False,
+                        help="Automatically add this number to AI Auto-Responder to test AI responses"
+                    )
+                else:
+                    test_monitor = False
+                    st.caption("💡 Add OpenAI API key to enable AI monitoring")
+
             with test_col2:
                 test_media = st.file_uploader(
                     "📎 Attach Media (Optional)",
@@ -322,6 +335,21 @@ with tab1:
                                 st.success(f"✅ Test message sent successfully to {formatted_phone}!")
                                 st.balloons()
                                 st.info("📱 Check your WhatsApp to verify the message was received correctly.")
+
+                                # Add to monitoring if checkbox was checked
+                                if test_monitor:
+                                    if formatted_phone not in st.session_state.monitored_contacts:
+                                        st.session_state.monitored_contacts.append(formatted_phone)
+                                        # Also add to bot's monitored contacts if bot exists
+                                        if st.session_state.bot:
+                                            if not hasattr(st.session_state.bot, 'monitored_contacts'):
+                                                st.session_state.bot.monitored_contacts = []
+                                            if formatted_phone not in st.session_state.bot.monitored_contacts:
+                                                st.session_state.bot.monitored_contacts.append(formatted_phone)
+                                        st.success(f"🤖 Added {formatted_phone} to AI monitoring!")
+                                        st.info("💡 Go to 'AI Auto-Responder' tab and click 'Start Monitoring' to enable AI responses")
+                                    else:
+                                        st.info(f"ℹ️ {formatted_phone} is already in monitoring list")
                             else:
                                 st.error("❌ Failed to send test message. Check the browser window for errors.")
                                 st.warning("Common issues:\n- Phone number not on WhatsApp\n- Not logged in\n- Internet connection")
@@ -606,14 +634,29 @@ with tab2:
 
             # Contact management
             if st.session_state.contacts_df is not None:
+                # Combine CSV contacts with session monitored contacts
+                available_contacts = st.session_state.contacts_df['phone_formatted'].tolist()
+                # Add any session monitored contacts that aren't in CSV
+                for contact in st.session_state.monitored_contacts:
+                    if contact not in available_contacts:
+                        available_contacts.append(contact)
+
                 monitored_contacts = st.multiselect(
                     "Select contacts to monitor",
-                    options=st.session_state.contacts_df['phone_formatted'].tolist(),
+                    options=available_contacts,
+                    default=st.session_state.monitored_contacts,  # Pre-select from test section
                     help="Select which contacts the bot should monitor and respond to"
                 )
             else:
-                st.info("Upload contacts in the Bulk Messaging tab first")
-                monitored_contacts = []
+                # No CSV uploaded, use session monitored contacts
+                monitored_contacts = st.multiselect(
+                    "Select contacts to monitor",
+                    options=st.session_state.monitored_contacts,
+                    default=st.session_state.monitored_contacts,
+                    help="Select which contacts the bot should monitor and respond to"
+                )
+                if len(st.session_state.monitored_contacts) == 0:
+                    st.info("💡 Tip: Send a test message with 'Add to AI monitoring' checked, or add contacts manually below")
 
             # Manual contact addition
             manual_phone = st.text_input(
@@ -625,11 +668,12 @@ with tab2:
             if manual_phone and st.button("➕ Add Contact"):
                 if validate_phone_number(manual_phone):
                     formatted = format_phone_number(manual_phone, country_code)
-                    if formatted not in monitored_contacts:
-                        monitored_contacts.append(formatted)
-                        st.success(f"✅ Added {formatted}")
+                    if formatted not in st.session_state.monitored_contacts:
+                        st.session_state.monitored_contacts.append(formatted)
+                        st.success(f"✅ Added {formatted} to monitoring list")
+                        st.info("🔄 Refresh the page to see it in the list above")
                     else:
-                        st.info("Contact already in list")
+                        st.info("Contact already in monitoring list")
                 else:
                     st.error("❌ Invalid phone number")
 
