@@ -389,31 +389,50 @@ Keep responses concise and helpful."""
             if is_video:
                 print("🎥 Selecting 'Photos & Videos' option...")
 
-                # Method 1: Try to find and click the Photos & Videos menu item
-                photos_clicked = self.driver.execute_script("""
-                    // Look for menu items
-                    const items = Array.from(document.querySelectorAll('li, div[role="button"], span[role="button"]'));
+                # Method 1: Click the media icon directly (data-icon='media-filled-refreshed')
+                photos_clicked = False
+                try:
+                    media_btn = self.driver.find_element(By.CSS_SELECTOR, "[data-icon='media-filled-refreshed']")
+                    if media_btn and media_btn.is_displayed():
+                        media_btn.click()
+                        print("✅ Clicked 'Photos & Videos' (media-filled-refreshed)")
+                        photos_clicked = True
+                        time.sleep(1)
+                except:
+                    pass
 
-                    for (const item of items) {
-                        const text = (item.textContent || '').toLowerCase();
-                        const label = (item.getAttribute('aria-label') || '').toLowerCase();
-
-                        // Check if it contains both "photo" and "video"
-                        if ((text.includes('photo') && text.includes('video')) ||
-                            (label.includes('photo') && label.includes('video')) ||
-                            text.includes('photos & videos') ||
-                            label.includes('photos & videos')) {
-                            item.click();
+                # Method 2: JavaScript fallback
+                if not photos_clicked:
+                    photos_clicked = self.driver.execute_script("""
+                        // Look for the media icon
+                        const mediaBtn = document.querySelector('[data-icon="media-filled-refreshed"]');
+                        if (mediaBtn && mediaBtn.offsetParent !== null) {
+                            mediaBtn.click();
                             return true;
                         }
-                    }
-                    return false;
-                """)
 
-                if photos_clicked:
-                    print("✅ Clicked 'Photos & Videos'")
-                    time.sleep(1)
-                else:
+                        // Fallback: Look for menu items with photo/video text
+                        const items = Array.from(document.querySelectorAll('li, div[role="button"], span[role="button"]'));
+                        for (const item of items) {
+                            const text = (item.textContent || '').toLowerCase();
+                            const label = (item.getAttribute('aria-label') || '').toLowerCase();
+
+                            if ((text.includes('photo') && text.includes('video')) ||
+                                (label.includes('photo') && label.includes('video')) ||
+                                text.includes('photos & videos') ||
+                                label.includes('photos & videos')) {
+                                item.click();
+                                return true;
+                            }
+                        }
+                        return false;
+                    """)
+
+                    if photos_clicked:
+                        print("✅ Clicked 'Photos & Videos' (via JavaScript)")
+                        time.sleep(1)
+
+                if not photos_clicked:
                     print("⚠️  Could not find 'Photos & Videos' button, trying direct file input")
 
             # Find file input
@@ -507,7 +526,9 @@ Keep responses concise and helpful."""
 
             # Method 1: Try multiple send button selectors
             send_selectors = [
-                "[data-icon='send']",
+                "[data-icon='wds-ic-send-filled']",  # New WhatsApp UI
+                "[data-icon='send']",  # Older UI
+                "span[data-icon='wds-ic-send-filled']",
                 "span[data-icon='send']",
                 "[aria-label='Send']",
                 "button[aria-label='Send']",
@@ -530,6 +551,7 @@ Keep responses concise and helpful."""
                 print("⚠️  Direct click failed, trying JavaScript...")
                 send_success = self.driver.execute_script("""
                     const selectors = [
+                        '[data-icon="wds-ic-send-filled"]',  // New WhatsApp UI
                         '[data-icon="send"]',
                         '[aria-label="Send"]',
                         '[data-testid="send"]'
