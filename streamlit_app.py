@@ -225,13 +225,27 @@ Keep responses concise and helpful. Always be polite and friendly.""",
     st.header("📊 Session Stats")
     if st.session_state.bot:
         stats = st.session_state.bot.get_stats()
+
+        # Overview metrics
+        st.metric("📤 Messages Sent", stats.get('messages_sent', 0))
+        st.metric("❌ Failed", stats.get('messages_failed', 0))
+        st.metric("✅ Success Rate", f"{stats.get('success_rate', 0):.0%}")
+
+        st.divider()
+
+        # Read receipt metrics
+        st.caption("📬 Message Status:")
         col1, col2 = st.columns(2)
         with col1:
-            st.metric("Messages Sent", stats.get('messages_sent', 0))
-            st.metric("AI Responses", stats.get('ai_responses', 0))
+            st.metric("✓✓ Delivered", stats.get('messages_delivered', 0))
         with col2:
-            st.metric("Success Rate", f"{stats.get('success_rate', 0):.0%}")
-            st.metric("Conversations", len(stats.get('conversation_history', {})))
+            st.metric("✓✓ Read", stats.get('messages_read', 0))
+
+        st.divider()
+
+        # Other stats
+        st.metric("🤖 AI Responses", stats.get('ai_responses', 0))
+        st.metric("💬 Conversations", len(stats.get('conversation_history', {})))
 
 # Main content area - Tabs
 tab1, tab2, tab3, tab4 = st.tabs(["📤 Bulk Messaging", "🤖 AI Auto-Responder", "📊 Analytics", "❓ Help"])
@@ -753,18 +767,38 @@ with tab3:
     if st.session_state.bot:
         stats = st.session_state.bot.get_stats()
 
-        # Key metrics
+        # Key metrics - Row 1
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("📤 Messages Sent", stats.get('messages_sent', 0))
         with col2:
-            st.metric("🤖 AI Responses", stats.get('ai_responses', 0))
+            st.metric("❌ Messages Failed", stats.get('messages_failed', 0))
         with col3:
             success_rate = stats.get('success_rate', 0)
             st.metric("✅ Success Rate", f"{success_rate:.0%}")
+            st.caption("(Sent / Total Attempts)")
+        with col4:
+            st.metric("🤖 AI Responses", stats.get('ai_responses', 0))
+
+        # Read Receipt Stats - Row 2
+        st.markdown("### 📬 Message Status")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            sent = stats.get('messages_sent', 0)
+            st.metric("📨 Total Sent", sent)
+        with col2:
+            delivered = stats.get('messages_delivered', 0)
+            st.metric("✓✓ Delivered", delivered)
+            if sent > 0:
+                st.caption(f"{(delivered/sent*100):.1f}% of sent")
+        with col3:
+            read = stats.get('messages_read', 0)
+            st.metric("✓✓ Read (Blue Checks)", read)
+            if sent > 0:
+                st.caption(f"{(read/sent*100):.1f}% of sent")
         with col4:
             conversations = len(stats.get('conversation_history', {}))
-            st.metric("💬 Active Conversations", conversations)
+            st.metric("💬 Conversations", conversations)
 
         st.divider()
 
