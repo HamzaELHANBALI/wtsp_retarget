@@ -2,9 +2,10 @@
 # Increase max upload size to 500MB (in MB)
 maxUploadSize = 500
 
-# Enable CORS for local development
+# Disable XSRF protection to allow CORS for local development
+# Note: If you need XSRF protection, set enableCORS = true instead
 enableCORS = false
-enableXsrfProtection = true
+enableXsrfProtection = false
 
 [browser]
 # Gather usage stats
