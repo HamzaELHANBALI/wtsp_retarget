@@ -97,7 +97,8 @@ Keep responses concise and helpful."""
 
         # Conversation tracking
         self.conversations: Dict[str, List[Dict]] = {}
-        self.last_messages: Dict[str, str] = {}
+        self.last_messages: Dict[str, str] = {}  # Legacy text-based tracking
+        self.seen_message_ids: Dict[str, set] = {}  # New ID-based tracking
         self.monitored_contacts: List[str] = []
 
         # Statistics
@@ -907,14 +908,30 @@ Keep responses concise and helpful."""
                 print("💡 Tip: Make sure the chat exists and WhatsApp Web is properly loaded")
                 return None
 
+            # Scroll to ensure all recent messages are loaded
+            print("📜 Scrolling to load recent messages...")
+            try:
+                self.driver.execute_script("""
+                    // Find the message container and scroll to bottom
+                    const msgContainer = document.querySelector('[data-testid="conversation-panel-body"]') ||
+                                        document.querySelector('[data-testid="conversation-panel-messages"]');
+                    if (msgContainer) {
+                        msgContainer.scrollTop = msgContainer.scrollHeight;
+                    }
+                """)
+                time.sleep(1.5)  # Wait for messages to render after scroll
+            except Exception as scroll_err:
+                print(f"⚠️  Could not scroll: {scroll_err}")
+
             # Give extra time for messages to fully render
-            time.sleep(2)
+            time.sleep(1.5)
 
             # Try multiple strategies to find incoming messages
             last_msg = None
             all_incoming = []
 
-            # Strategy 1: Use JavaScript to find incoming messages more reliably
+            # Strategy 1: Use JavaScript to find incoming messages with timestamps/IDs
+            # This is MORE ROBUST - tracks messages by their unique attributes
             result = self.driver.execute_script("""
                 // Find all message bubbles
                 const messageContainers = document.querySelectorAll('[data-testid="msg-container"]');
@@ -960,28 +977,78 @@ Keep responses concise and helpful."""
                         }
 
                         if (text && text.trim()) {
-                            incomingMessages.push(text.trim());
+                            // Get timestamp if available
+                            let timestamp = null;
+                            const timeEl = container.querySelector('[data-testid="msg-meta"]') ||
+                                          container.querySelector('span[class*="timestamp"]') ||
+                                          container.querySelector('div[data-pre-plain-text]');
+                            if (timeEl) {
+                                timestamp = timeEl.textContent || timeEl.getAttribute('data-pre-plain-text');
+                            }
+
+                            // Create unique ID from message content + timestamp
+                            const msgId = container.getAttribute('data-id') ||
+                                         (text.substring(0, 50) + (timestamp || '')).replace(/\s/g, '');
+
+                            incomingMessages.push({
+                                text: text.trim(),
+                                timestamp: timestamp,
+                                id: msgId
+                            });
                         }
                     }
                 }
 
                 console.log('Incoming messages found:', incomingMessages.length);
 
-                // Return all incoming messages and the last one
+                // Return all incoming messages
                 return {
-                    all: incomingMessages,
-                    last: incomingMessages.length > 0 ? incomingMessages[incomingMessages.length - 1] : null,
+                    messages: incomingMessages,
                     count: incomingMessages.length
                 };
             """)
 
             if result:
-                all_incoming = result.get('all', [])
-                last_msg = result.get('last')
+                messages = result.get('messages', [])
                 msg_count = result.get('count', 0)
-                print(f"📨 Found {msg_count} incoming messages from {phone}")
-                if all_incoming:
-                    print(f"💬 Last incoming message: {last_msg[:50]}..." if last_msg and len(last_msg) > 50 else f"💬 Last incoming message: {last_msg}")
+                print(f"📨 Found {msg_count} incoming messages in chat with {phone}")
+
+                # Get seen message IDs for this phone
+                if not hasattr(self, 'seen_message_ids'):
+                    self.seen_message_ids = {}
+                if phone not in self.seen_message_ids:
+                    self.seen_message_ids[phone] = set()
+
+                # Find NEW messages (ones we haven't seen before)
+                new_messages = []
+                for msg in messages:
+                    msg_id = msg.get('id', '')
+                    msg_text = msg.get('text', '')
+                    if msg_id and msg_id not in self.seen_message_ids[phone]:
+                        new_messages.append(msg)
+                        print(f"  ✨ NEW: {msg_text[:60]}..." if len(msg_text) > 60 else f"  ✨ NEW: {msg_text}")
+
+                # If we found new messages, mark them as seen and return the FIRST new one
+                if new_messages:
+                    # Mark ALL new messages as seen
+                    for msg in new_messages:
+                        self.seen_message_ids[phone].add(msg.get('id', ''))
+
+                    # Keep only last 100 message IDs to avoid memory bloat
+                    if len(self.seen_message_ids[phone]) > 100:
+                        # Convert to list, keep last 100, convert back to set
+                        self.seen_message_ids[phone] = set(list(self.seen_message_ids[phone])[-100:])
+
+                    # Return the FIRST new message (oldest unread)
+                    last_msg = new_messages[0].get('text', '')
+                    print(f"✨ Returning FIRST new message from {phone}: {last_msg[:100]}...")
+
+                    # Also update the old tracking for backward compatibility
+                    if last_msg:
+                        self.last_messages[phone] = last_msg
+                else:
+                    print(f"ℹ️  All messages already seen")
+                    all_incoming = []  # Clear to trigger fallback
 
             # Strategy 2: Fallback using Selenium if JavaScript method fails
             if not last_msg:
@@ -1001,7 +1068,15 @@ Keep responses concise and helpful."""
                             last_msg = messages[-1].text.strip()
                             print(f"✅ Found message with selector: {selector}")
                             if last_msg:
-                                break
+                                # Use text-based tracking as fallback
+                                last_seen = self.last_messages.get(phone, "")
+                                if last_msg != last_seen:
+                                    self.last_messages[phone] = last_msg
+                                    print(f"✨ NEW MESSAGE from {phone}: {last_msg[:100]}...")
+                                    return last_msg
+                                else:
+                                    print(f"ℹ️  No new messages (already seen)")
+                                    return None
                     except Exception as sel_err:
                         continue
 
@@ -1009,20 +1084,8 @@ Keep responses concise and helpful."""
                 print(f"ℹ️  No new messages from {phone}")
                 return None
 
-            # Check if it's new
-            last_seen = self.last_messages.get(phone, "")
-
-            print(f"📝 Last seen message: {last_seen[:50]}..." if last_seen and len(last_seen) > 50 else f"📝 Last seen message: {last_seen}")
-            print(f"📝 Current message: {last_msg[:50]}..." if last_msg and len(last_msg) > 50 else f"📝 Current message: {last_msg}")
-
-            if last_msg and last_msg != last_seen:
-                self.last_messages[phone] = last_msg
-                print(f"✨ NEW MESSAGE from {phone}: {last_msg[:100]}...")
-                return last_msg
-            else:
-                print(f"ℹ️  No new messages (already seen)")
-
-            return None
+            # If we got here, last_msg is already set from the ID-based method
+            return last_msg
 
         except Exception as e:
             print(f"⚠️  Error checking messages from {phone}: {e}")
@@ -1085,6 +1148,33 @@ Keep responses concise and helpful."""
         except Exception as e:
             print(f"⚠️  AI response error: {e}")
             return "Thank you for your message. We'll get back to you soon."
+
+    def initialize_message_tracking(self, phone: str):
+        """
+        Mark all existing messages from a contact as "seen" to avoid responding to old messages.
+        Call this when you start monitoring a new contact.
+
+        Args:
+            phone: Phone number to initialize tracking for
+        """
+        try:
+            phone = self._format_phone(phone)
+            print(f"🔄 Initializing message tracking for {phone}...")
+
+            # Open chat
+            url = f"https://web.whatsapp.com/send?phone={phone.replace('+', '')}"
+            self.driver.get(url)
+            time.sleep(5)
+
+            # Use get_new_messages to populate seen_message_ids without returning anything
+            # This will mark all current messages as "seen"
+            _ = self.get_new_messages(phone)
+
+            print(f"✅ Message tracking initialized for {phone}")
+            print(f"   {len(self.seen_message_ids.get(phone, set()))} messages marked as seen")
+
+        except Exception as e:
+            print(f"⚠️  Error initializing tracking for {phone}: {e}")
 
     def monitor_and_respond(self, check_interval: int = 10, duration: Optional[int] = None):
         """
