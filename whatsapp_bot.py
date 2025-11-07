@@ -558,10 +558,17 @@ Keep responses concise and helpful."""
                                     # Check accept attribute
                                     accept_attr = inp.get_attribute('accept') or ''
 
-                                    # For videos, skip if it ONLY accepts images
+                                    # For videos, MODIFY if it ONLY accepts images
                                     if is_video and accept_attr and 'video' not in accept_attr and 'image' in accept_attr:
-                                        print(f"   Skipping image-only input: {accept_attr}")
-                                        continue
+                                        print(f"   🔧 Found image-only input: {accept_attr}")
+                                        print(f"   🔧 Modifying to accept videos...")
+                                        # Use JavaScript to modify the accept attribute
+                                        self.driver.execute_script(
+                                            "arguments[0].setAttribute('accept', 'image/*,video/*');",
+                                            inp
+                                        )
+                                        accept_attr = inp.get_attribute('accept')
+                                        print(f"   ✅ Modified to: {accept_attr}")
 
                                     file_input = inp
                                     found_selector = selector
@@ -569,7 +576,8 @@ Keep responses concise and helpful."""
                                     if accept_attr:
                                         print(f"   Accepts: {accept_attr}")
                                     break
-                            except:
+                            except Exception as ex:
+                                print(f"   ⚠️  Error: {str(ex)}")
                                 continue
                         if file_input:
                             break
@@ -597,13 +605,22 @@ Keep responses concise and helpful."""
 
                             accept_attr = inp.get_attribute('accept') or ''
 
-                            # For videos, REJECT image-only inputs
+                            # For videos, MODIFY image-only inputs to accept videos
                             if is_video:
                                 if accept_attr and 'video' not in accept_attr and 'image' in accept_attr:
-                                    print(f"   ❌ Skipping image-only input: {accept_attr}")
-                                    continue
+                                    print(f"   🔧 Found image-only input: {accept_attr}")
+                                    print(f"   🔧 Modifying to accept videos...")
+                                    # Use JavaScript to modify the accept attribute
+                                    self.driver.execute_script(
+                                        "arguments[0].setAttribute('accept', 'image/*,video/*');",
+                                        inp
+                                    )
+                                    new_accept = inp.get_attribute('accept')
+                                    print(f"   ✅ Modified accept attribute to: {new_accept}")
+                                    file_input = inp
+                                    break
                                 # Accept inputs that explicitly allow video OR have no restrictions
-                                if not accept_attr or 'video' in accept_attr or ('image' not in accept_attr):
+                                elif not accept_attr or 'video' in accept_attr or ('image' not in accept_attr):
                                     file_input = inp
                                     print(f"✅ Found suitable file input - Accepts: {accept_attr or 'any file type'}")
                                     break
@@ -612,7 +629,8 @@ Keep responses concise and helpful."""
                                 file_input = inp
                                 print(f"✅ Found file input - Accepts: {accept_attr or 'any file type'}")
                                 break
-                        except:
+                        except Exception as inner_ex:
+                            print(f"   ⚠️  Error checking input: {str(inner_ex)}")
                             continue
 
                     if not file_input:
