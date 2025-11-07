@@ -336,7 +336,33 @@ Keep responses concise and helpful."""
             else:
                 print(f"🖼️ Sending image")
 
-            # Click attachment button - try multiple selectors
+            # STEP 1: Type caption text FIRST (before attaching media)
+            # This way it automatically becomes the caption when media is attached
+            if caption:
+                print(f"📝 Typing caption first (will become media caption)...")
+                try:
+                    input_box = self.wait.until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "[contenteditable='true'][data-tab='10']"))
+                    )
+
+                    # Type caption using JavaScript (handles emojis)
+                    self.driver.execute_script(
+                        """
+                        const el = arguments[0];
+                        const text = arguments[1];
+                        el.focus();
+                        document.execCommand('insertText', false, text);
+                        el.dispatchEvent(new Event('input', {bubbles: true}));
+                        """,
+                        input_box,
+                        caption
+                    )
+                    print(f"✅ Caption typed: {caption[:50]}...")
+                    time.sleep(1)
+                except Exception as e:
+                    print(f"⚠️  Could not type caption: {e}")
+
+            # STEP 2: Click attachment button - try multiple selectors
             print("📎 Opening attachment menu...")
 
             attach_selectors = [
@@ -477,88 +503,71 @@ Keep responses concise and helpful."""
                 except:
                     raise Exception("Could not find file input element")
 
-            # Send file path to input
-            # This should close Finder and upload the file
-            print(f"📤 Uploading file: {Path(media_path).name}")
+            # STEP 3: Send file path to input
+            # This will close Finder and upload the file with the caption we typed earlier
+            print(f"📤 Sending file to WhatsApp...")
             try:
                 file_input.send_keys(abs_path)
                 print(f"✅ File path sent to input")
 
-                # Wait a moment for Finder to close
-                time.sleep(2)
+                # Wait for Finder to close and upload to start
+                print("⏳ Waiting for Finder to close and upload to begin...")
+                time.sleep(3)
 
-                # Verify upload started by checking if Finder closed and preview appeared
-                preview_exists = self.driver.execute_script("""
-                    // Check if media preview/editor is visible
-                    const preview = document.querySelector('[data-animate-media-viewer]') ||
-                                   document.querySelector('[data-testid="media-viewer"]') ||
-                                   document.querySelector('div[role="dialog"]');
-                    return preview !== null;
-                """)
+                # Verify upload started by checking if preview appeared
+                max_attempts = 5
+                preview_found = False
+                for attempt in range(max_attempts):
+                    preview_exists = self.driver.execute_script("""
+                        // Check if media preview/editor is visible
+                        const preview = document.querySelector('[data-animate-media-viewer]') ||
+                                       document.querySelector('[data-testid="media-viewer"]') ||
+                                       document.querySelector('div[role="dialog"]') ||
+                                       document.querySelector('[data-icon="wds-ic-send-filled"]');
+                        return preview !== null;
+                    """)
 
-                if preview_exists:
-                    print(f"✅ File upload started (preview visible)")
-                else:
-                    print(f"⚠️  Could not verify upload preview, continuing anyway...")
+                    if preview_exists:
+                        print(f"✅ Upload started, preview visible")
+                        preview_found = True
+                        break
+                    else:
+                        if attempt < max_attempts - 1:
+                            print(f"   Waiting for preview... (attempt {attempt + 1}/{max_attempts})")
+                            time.sleep(2)
+
+                if not preview_found:
+                    print(f"⚠️  Could not verify upload preview, but continuing...")
 
             except Exception as e:
                 print(f"⚠️  Error sending file path: {e}")
                 raise
 
-            print("⏳ Uploading media...")
-            time.sleep(4)  # Wait for upload
-
-            # Add caption if provided
-            if caption:
-                try:
-                    # Wait for caption box to appear
-                    time.sleep(2)
-
-                    # Find caption input (appears after media upload)
-                    caption_selectors = [
-                        "[data-testid='media-caption-input-container'] [contenteditable='true']",
-                        "[contenteditable='true'][data-tab='10']",
-                        "div[contenteditable='true'][role='textbox']"
-                    ]
-
-                    caption_box = None
-                    for selector in caption_selectors:
-                        try:
-                            caption_box = self.driver.find_element(By.CSS_SELECTOR, selector)
-                            if caption_box and caption_box.is_displayed():
-                                break
-                        except:
-                            continue
-
-                    if not caption_box:
-                        caption_box = self.wait.until(
-                            EC.presence_of_element_located((By.CSS_SELECTOR, "[contenteditable='true']"))
-                        )
-
-                    # Add caption using JavaScript
-                    self.driver.execute_script(
-                        """
-                        const el = arguments[0];
-                        const text = arguments[1];
-                        el.focus();
-                        document.execCommand('insertText', false, text);
-                        el.dispatchEvent(new Event('input', {bubbles: true}));
-                        """,
-                        caption_box,
-                        caption
-                    )
-
-                    time.sleep(1)
-                    print(f"📝 Caption added: {caption[:50]}...")
-
-                except Exception as e:
-                    print(f"⚠️  Could not add caption: {e}")
-
-            # Wait for upload to complete and send button to be enabled
-            print("⏳ Waiting for upload to complete...")
+            # STEP 4: Wait for upload to complete
+            # Caption should already be there from Step 1
+            print("⏳ Waiting for video to finish uploading...")
             time.sleep(4)
 
-            # Click send button - try multiple methods
+            # Verify caption is still there
+            if caption:
+                try:
+                    caption_present = self.driver.execute_script("""
+                        const captionBox = document.querySelector('[contenteditable="true"]');
+                        if (captionBox) {
+                            const text = captionBox.textContent || captionBox.innerText || '';
+                            return text.length > 0;
+                        }
+                        return false;
+                    """)
+
+                    if caption_present:
+                        print(f"✅ Caption is present in preview")
+                    else:
+                        print(f"⚠️  Caption may not be visible, will verify after send...")
+                except:
+                    pass
+
+            # STEP 5: Click send button - try multiple methods
             print("📤 Looking for send button...")
 
             send_success = False
