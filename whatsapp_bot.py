@@ -668,19 +668,63 @@ Keep responses concise and helpful."""
             # Open chat
             url = f"https://web.whatsapp.com/send?phone={phone.replace('+', '')}"
             self.driver.get(url)
-            time.sleep(2)
+            time.sleep(3)
 
-            # Get all messages
-            messages = self.driver.find_elements(
-                By.CSS_SELECTOR,
-                "[data-testid='msg-container'] [class*='message-in'] .selectable-text"
-            )
+            # Try multiple strategies to find incoming messages
+            last_msg = None
 
-            if not messages:
+            # Strategy 1: Use JavaScript to find incoming messages more reliably
+            last_msg = self.driver.execute_script("""
+                // Find all message bubbles
+                const messageContainers = document.querySelectorAll('[data-testid="msg-container"]');
+
+                // Filter for incoming messages (not sent by us)
+                const incomingMessages = [];
+
+                for (const container of messageContainers) {
+                    // Check if this is an incoming message (has 'message-in' class)
+                    // WhatsApp uses 'message-in' for received messages and 'message-out' for sent
+                    const msgDiv = container.querySelector('[class*="message-in"]');
+
+                    if (msgDiv) {
+                        // Get the text content
+                        const textElements = container.querySelectorAll('.selectable-text, [data-testid="conversation-text"]');
+
+                        for (const textEl of textElements) {
+                            const text = textEl.textContent || textEl.innerText;
+                            if (text && text.trim()) {
+                                incomingMessages.push(text.trim());
+                            }
+                        }
+                    }
+                }
+
+                // Return the last incoming message
+                return incomingMessages.length > 0 ? incomingMessages[incomingMessages.length - 1] : null;
+            """)
+
+            # Strategy 2: Fallback using Selenium if JavaScript method fails
+            if not last_msg:
+                # Try different selector combinations
+                selector_attempts = [
+                    "[data-testid='msg-container'] [class*='message-in'] .selectable-text",
+                    "[data-testid='msg-container'] [class*='message-in'] [data-testid='conversation-text']",
+                    "div[class*='message-in'] .selectable-text",
+                    "div[class*='message-in'] span.selectable-text",
+                ]
+
+                for selector in selector_attempts:
+                    try:
+                        messages = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                        if messages:
+                            last_msg = messages[-1].text.strip()
+                            if last_msg:
+                                break
+                    except:
+                        continue
+
+            if not last_msg:
                 return None
-
-            # Get last incoming message
-            last_msg = messages[-1].text.strip()
 
             # Check if it's new
             last_seen = self.last_messages.get(phone, "")
@@ -693,6 +737,8 @@ Keep responses concise and helpful."""
 
         except Exception as e:
             print(f"⚠️  Error checking messages from {phone}: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
     def generate_ai_response(self, message: str, phone: str) -> str:
