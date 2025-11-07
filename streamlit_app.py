@@ -76,8 +76,55 @@ if 'conversation_history' not in st.session_state:
     st.session_state.conversation_history = []
 if 'monitored_contacts' not in st.session_state:
     st.session_state.monitored_contacts = []
+if 'auto_monitoring_enabled' not in st.session_state:
+    st.session_state.auto_monitoring_enabled = True
 
 # Helper functions
+def auto_add_to_monitoring(phone):
+    """Automatically add phone to monitoring list"""
+    if phone not in st.session_state.monitored_contacts:
+        st.session_state.monitored_contacts.append(phone)
+        # Also add to bot if exists
+        if st.session_state.bot:
+            if phone not in st.session_state.bot.monitored_contacts:
+                st.session_state.bot.monitored_contacts.append(phone)
+
+def check_and_respond_to_messages():
+    """Check all monitored contacts for new messages and respond"""
+    if not st.session_state.bot:
+        return []
+
+    responses = []
+    for phone in st.session_state.monitored_contacts:
+        try:
+            new_msg = st.session_state.bot.get_new_messages(phone)
+            if new_msg:
+                # Generate AI response
+                ai_response = st.session_state.bot.generate_ai_response(new_msg, phone)
+                # Send response
+                if st.session_state.bot.send_message(phone, ai_response):
+                    responses.append({
+                        'phone': phone,
+                        'customer_msg': new_msg,
+                        'ai_response': ai_response,
+                        'success': True
+                    })
+                else:
+                    responses.append({
+                        'phone': phone,
+                        'customer_msg': new_msg,
+                        'ai_response': ai_response,
+                        'success': False
+                    })
+        except Exception as e:
+            responses.append({
+                'phone': phone,
+                'error': str(e),
+                'success': False
+            })
+    return responses
+
+# Helper functions (existing)
 def validate_phone_number(phone):
     """Validate phone number format"""
     if pd.isna(phone):
@@ -286,15 +333,10 @@ with tab1:
                     key="test_message"
                 )
 
-                # Option to add to monitoring
+                # Info about auto-monitoring
                 if openai_api_key:
-                    test_monitor = st.checkbox(
-                        "🤖 Also add to AI monitoring",
-                        value=False,
-                        help="Automatically add this number to AI Auto-Responder to test AI responses"
-                    )
+                    st.info("ℹ️ **Auto-monitoring enabled:** This number will be automatically added to AI monitoring after sending.")
                 else:
-                    test_monitor = False
                     st.caption("💡 Add OpenAI API key to enable AI monitoring")
 
             with test_col2:
@@ -350,20 +392,10 @@ with tab1:
                                 st.balloons()
                                 st.info("📱 Check your WhatsApp to verify the message was received correctly.")
 
-                                # Add to monitoring if checkbox was checked
-                                if test_monitor:
-                                    if formatted_phone not in st.session_state.monitored_contacts:
-                                        st.session_state.monitored_contacts.append(formatted_phone)
-                                        # Also add to bot's monitored contacts if bot exists
-                                        if st.session_state.bot:
-                                            if not hasattr(st.session_state.bot, 'monitored_contacts'):
-                                                st.session_state.bot.monitored_contacts = []
-                                            if formatted_phone not in st.session_state.bot.monitored_contacts:
-                                                st.session_state.bot.monitored_contacts.append(formatted_phone)
-                                        st.success(f"🤖 Added {formatted_phone} to AI monitoring!")
-                                        st.info("💡 Go to 'AI Auto-Responder' tab and click 'Start Monitoring' to enable AI responses")
-                                    else:
-                                        st.info(f"ℹ️ {formatted_phone} is already in monitoring list")
+                                # Automatically add to monitoring (no checkbox needed)
+                                auto_add_to_monitoring(formatted_phone)
+                                st.success(f"🤖 Automatically added {formatted_phone} to AI monitoring!")
+                                st.info("💡 Go to 'AI Auto-Responder' tab to check for responses")
                             else:
                                 st.error("❌ Failed to send test message. Check the browser window for errors.")
                                 st.warning("Common issues:\n- Phone number not on WhatsApp\n- Not logged in\n- Internet connection")
@@ -597,6 +629,8 @@ with tab1:
 
                             if success:
                                 sent_count += 1
+                                # Automatically add to monitoring
+                                auto_add_to_monitoring(contact['phone_formatted'])
                                 with results_container:
                                     st.success(f"✅ Sent to {contact['name']} ({contact['phone_formatted']})")
                             else:
@@ -704,61 +738,133 @@ with tab2:
                 help="How often to check for new messages"
             )
 
+            # Manual check button (works anytime)
+            if st.button("🔍 Check for New Messages & Respond Now", type="primary", disabled=len(monitored_contacts)==0):
+                if not openai_api_key:
+                    st.error("❌ Please enter OpenAI API key in sidebar")
+                else:
+                    with st.spinner(f"Checking {len(monitored_contacts)} contacts for new messages..."):
+                        # Update bot's monitored contacts
+                        st.session_state.bot.monitored_contacts = monitored_contacts
+                        # Check and respond
+                        responses = check_and_respond_to_messages()
+
+                        if responses:
+                            st.success(f"✅ Checked all contacts. Found {len([r for r in responses if r['success']])} new messages!")
+
+                            # Display responses
+                            for resp in responses:
+                                if resp['success']:
+                                    with st.expander(f"✅ Responded to {resp['phone']}", expanded=True):
+                                        st.markdown(f"**Customer:** {resp['customer_msg']}")
+                                        st.markdown(f"**AI Response:** {resp['ai_response']}")
+                                else:
+                                    with st.expander(f"❌ Error with {resp['phone']}"):
+                                        st.error(f"Error: {resp.get('error', 'Unknown error')}")
+                        else:
+                            st.info("ℹ️ No new messages from monitored contacts.")
+
+            st.caption("💡 Click the button above to manually check for messages and send AI responses.")
+
+            st.divider()
+
+            # Automatic monitoring (continuous) - Optional
+            st.markdown("### 🔄 Auto-Refresh (Optional)")
+            st.info("⚠️ Auto-refresh will reload the page periodically. Use 'Check Now' button above for one-time checks.")
+
             # Start/Stop monitoring
             if not st.session_state.monitoring:
-                if st.button("▶️ Start Monitoring", type="primary", disabled=len(monitored_contacts)==0):
+                if st.button("▶️ Enable Auto-Refresh", type="secondary", disabled=len(monitored_contacts)==0):
                     if not openai_api_key:
                         st.error("❌ Please enter OpenAI API key in sidebar")
                     else:
                         st.session_state.monitoring = True
                         st.session_state.bot.monitored_contacts = monitored_contacts
-                        st.success("✅ Monitoring started!")
-                        st.info(f"Monitoring {len(monitored_contacts)} contacts. The bot will respond automatically to new messages.")
+                        st.success("✅ Auto-refresh enabled!")
+                        st.info(f"Page will auto-refresh every {check_interval} seconds to check for new messages.")
                         st.rerun()
             else:
-                if st.button("⏸️ Stop Monitoring", type="secondary"):
+                if st.button("⏸️ Disable Auto-Refresh", type="secondary"):
                     st.session_state.monitoring = False
-                    st.info("Monitoring stopped")
+                    st.info("Auto-refresh disabled")
                     st.rerun()
 
         with col2:
             st.markdown("### 💬 Live Activity")
 
             if st.session_state.monitoring:
-                st.info(f"🟢 Monitoring {len(monitored_contacts)} contacts (checking every {check_interval}s)")
+                st.info(f"🟢 Auto-refresh enabled (every {check_interval}s)")
 
-                # Placeholder for live messages
-                messages_container = st.container()
+                # Auto-check for messages when monitoring is enabled
+                with st.spinner("Checking for new messages..."):
+                    # Update bot's monitored contacts
+                    st.session_state.bot.monitored_contacts = monitored_contacts
+                    # Check and respond automatically
+                    responses = check_and_respond_to_messages()
 
-                # Run monitoring loop
-                with messages_container:
-                    st.markdown("#### Recent Interactions")
+                    if responses:
+                        st.success(f"✅ Found {len([r for r in responses if r['success']])} new messages!")
+                        # Display responses
+                        for resp in responses:
+                            if resp['success']:
+                                with st.expander(f"✅ Responded to {resp['phone']}", expanded=True):
+                                    st.markdown(f"**Customer:** {resp['customer_msg']}")
+                                    st.markdown(f"**AI Response:** {resp['ai_response']}")
+                            else:
+                                with st.expander(f"❌ Error with {resp['phone']}"):
+                                    st.error(f"Error: {resp.get('error', 'Unknown error')}")
+                    else:
+                        st.info("ℹ️ No new messages yet.")
 
-                    # Display conversation history
-                    if st.session_state.bot:
-                        stats = st.session_state.bot.get_stats()
-                        conv_history = stats.get('conversation_history', {})
+                # Display conversation history
+                st.markdown("#### Recent Conversations")
+                if st.session_state.bot:
+                    stats = st.session_state.bot.get_stats()
+                    conv_history = stats.get('conversation_history', {})
 
-                        if conv_history:
-                            for phone, messages in list(conv_history.items())[-5:]:  # Show last 5 conversations
-                                with st.expander(f"💬 {phone}"):
-                                    for msg in messages[-5:]:  # Show last 5 messages per contact
-                                        role = msg.get('role', 'user')
-                                        content = msg.get('content', '')
-                                        if role == 'user':
-                                            st.markdown(f"**Customer:** {content}")
-                                        else:
-                                            st.markdown(f"**AI:** {content}")
-                        else:
-                            st.info("No conversations yet. Waiting for messages...")
+                    if conv_history:
+                        for phone, messages in list(conv_history.items())[-5:]:  # Show last 5 conversations
+                            with st.expander(f"💬 {phone}"):
+                                for msg in messages[-5:]:  # Show last 5 messages per contact
+                                    role = msg.get('role', 'user')
+                                    content = msg.get('content', '')
+                                    if role == 'user':
+                                        st.markdown(f"**Customer:** {content}")
+                                    else:
+                                        st.markdown(f"**AI:** {content}")
+                    else:
+                        st.info("No conversations yet.")
 
-                    # Auto-refresh every check_interval seconds
-                    if st.button("🔄 Refresh"):
-                        st.rerun()
-
-                    st.caption("💡 Tip: The bot is running in the background. Refresh to see new messages.")
+                # Auto-refresh countdown
+                st.caption(f"🔄 Page will auto-refresh in {check_interval} seconds...")
+                time.sleep(check_interval)
+                st.rerun()
             else:
-                st.info("👆 Select contacts and click 'Start Monitoring' to begin")
+                # Manual refresh option when not monitoring
+                st.info("👆 Use 'Check for New Messages & Respond Now' button to manually check for messages")
+
+                # Display conversation history
+                st.markdown("#### Recent Conversations")
+                if st.session_state.bot:
+                    stats = st.session_state.bot.get_stats()
+                    conv_history = stats.get('conversation_history', {})
+
+                    if conv_history:
+                        for phone, messages in list(conv_history.items())[-5:]:  # Show last 5 conversations
+                            with st.expander(f"💬 {phone}"):
+                                for msg in messages[-5:]:  # Show last 5 messages per contact
+                                    role = msg.get('role', 'user')
+                                    content = msg.get('content', '')
+                                    if role == 'user':
+                                        st.markdown(f"**Customer:** {content}")
+                                    else:
+                                        st.markdown(f"**AI:** {content}")
+                    else:
+                        st.info("💡 Send messages to contacts, then use the 'Check Now' button to test AI responses.")
+
+                # Manual refresh button
+                if st.button("🔄 Refresh View"):
+                    st.rerun()
 
 # Tab 3: Analytics
 with tab3:
