@@ -102,6 +102,9 @@ Keep responses concise and helpful."""
 
         # Statistics
         self.messages_sent = 0
+        self.messages_failed = 0
+        self.messages_delivered = 0
+        self.messages_read = 0
         self.ai_responses_sent = 0
 
         # Setup browser
@@ -257,6 +260,7 @@ Keep responses concise and helpful."""
                 )
             except TimeoutException:
                 print(f"❌ Invalid number or chat not loaded: {phone}")
+                self.messages_failed += 1
                 return False
 
             # Send media if provided
@@ -268,6 +272,7 @@ Keep responses concise and helpful."""
             # Send text (if no media or media failed)
             if not media_path:
                 if not self._send_text(message):
+                    self.messages_failed += 1
                     return False
 
             # Verify sent
@@ -284,6 +289,7 @@ Keep responses concise and helpful."""
 
         except Exception as e:
             print(f"❌ Error sending to {phone}: {e}")
+            self.messages_failed += 1
             return False
 
     def _send_text(self, message: str) -> bool:
@@ -865,12 +871,61 @@ Keep responses concise and helpful."""
         except KeyboardInterrupt:
             print("\n\n⏹️  Monitoring stopped by user")
 
+    def check_read_receipts(self):
+        """Check and update read receipt status for sent messages"""
+        try:
+            # Look for all sent message bubbles (outgoing messages)
+            messages = self.driver.find_elements(By.CSS_SELECTOR, "[data-testid='msg-container']")
+
+            delivered_count = 0
+            read_count = 0
+
+            for msg in messages:
+                try:
+                    # Check for read status (blue double check)
+                    read_icons = msg.find_elements(By.CSS_SELECTOR, "[data-icon='msg-dblcheck'][aria-label*='Read']")
+                    if read_icons:
+                        read_count += 1
+                        continue
+
+                    # Check for delivered status (gray double check)
+                    delivered_icons = msg.find_elements(By.CSS_SELECTOR, "[data-icon='msg-dblcheck']")
+                    if delivered_icons:
+                        delivered_count += 1
+
+                except:
+                    continue
+
+            # Update stats
+            self.messages_read = read_count
+            self.messages_delivered = delivered_count
+
+        except Exception as e:
+            print(f"⚠️  Could not check read receipts: {e}")
+
     def get_stats(self) -> Dict:
         """Get bot statistics"""
+        # Calculate success rate
+        total_attempts = self.messages_sent + self.messages_failed
+        success_rate = (self.messages_sent / total_attempts) if total_attempts > 0 else 0
+
+        # Update read receipts if browser is active
+        if self.driver:
+            try:
+                self.check_read_receipts()
+            except:
+                pass  # Silently fail if can't check
+
         return {
             "messages_sent": self.messages_sent,
+            "messages_failed": self.messages_failed,
+            "messages_delivered": self.messages_delivered,
+            "messages_read": self.messages_read,
+            "success_rate": success_rate,
+            "ai_responses": self.ai_responses_sent,  # Match streamlit key
             "ai_responses_sent": self.ai_responses_sent,
             "conversations": len(self.conversations),
+            "conversation_history": self.conversations,  # Match streamlit key
             "monitored_contacts": len(self.monitored_contacts)
         }
 
