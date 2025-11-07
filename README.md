@@ -16,17 +16,23 @@ A modern, reliable WhatsApp automation tool for bulk messaging and AI-powered cu
 
 We now have a beautiful, user-friendly web interface! Perfect for non-technical users.
 
-### Quick Launch
+### Quick Launch (Local)
 
 ```bash
-# Install dependencies (if not already done)
+# 1. Install dependencies (if not already done)
 pip install -r requirements.txt
 
-# Launch the web UI
+# 2. Set up API key in .env file (IMPORTANT!)
+cp .env.example .env
+nano .env  # Add your OpenAI API key
+
+# 3. Launch the web UI
 streamlit run streamlit_app.py
 ```
 
 The app will open in your browser at `http://localhost:8501`
+
+**🔐 Security Note:** The app loads API keys from the `.env` file automatically. Never expose your API key in the UI when deploying! See [DEPLOYMENT.md](DEPLOYMENT.md) for production deployment instructions.
 
 ### UI Features
 
@@ -365,10 +371,35 @@ print(stats)
 
 ## 🔒 Security & Privacy
 
+### API Key Security (IMPORTANT!)
+
+- **✅ DO:** Store API keys in `.env` file
+- **✅ DO:** Use environment variables for deployment
+- **❌ DON'T:** Hardcode API keys in code
+- **❌ DON'T:** Commit `.env` file to Git (already in .gitignore)
+- **❌ DON'T:** Enter API keys in web UI when deployed publicly
+
+**For Streamlit App:**
+- The app automatically loads `OPENAI_API_KEY` from `.env` file
+- If API key is in environment, it won't show input field
+- If no .env found, shows input (for local testing only)
+- **Always use .env file for production/deployment!**
+
+### Data Privacy
+
 - **API Keys**: Stored in `.env` (not committed to git)
 - **Session Data**: Stored locally in `whatsapp_profile/` (not uploaded)
 - **Conversations**: Stored in memory only (not persisted to disk)
 - **Data Sharing**: No data sent anywhere except OpenAI API for responses
+- **Uploaded CSVs**: Processed locally, not stored permanently
+
+### Deployment
+
+For production deployment with proper security:
+- 📖 **See [DEPLOYMENT.md](DEPLOYMENT.md)** for complete guide
+- Includes: Docker, VPS, Streamlit Cloud, HTTPS, password protection
+- Security checklist and best practices
+- Never expose API keys in deployed applications!
 
 ## ⚠️ Important Notes
 
@@ -432,19 +463,20 @@ Use responsibly and in compliance with WhatsApp's Terms of Service.
 
 ```
 wtsp_retarget/
-├── streamlit_app.py         # Web UI application (NEW)
+├── streamlit_app.py         # Web UI application
 ├── whatsapp_bot.py          # Main bot class
-├── clean_order_csv.py       # E-commerce CSV cleaner (NEW)
-├── test_phone_cleaning.py   # Tests for cleaning functions (NEW)
+├── clean_order_csv.py       # E-commerce CSV cleaner
+├── test_phone_cleaning.py   # Tests for cleaning functions
 ├── test_bot.py              # Example usage script
-├── contacts_template.csv    # Sample CSV template (NEW)
-├── CSV_CLEANING_GUIDE.md    # CSV cleaning documentation (NEW)
+├── contacts_template.csv    # Sample CSV template
+├── README.md                # Main documentation (this file)
+├── CSV_CLEANING_GUIDE.md    # CSV cleaning documentation
+├── DEPLOYMENT.md            # Production deployment guide (NEW)
 ├── requirements.txt         # Python dependencies
 ├── .env                     # API keys (create from .env.example)
 ├── .env.example            # Template for .env
 ├── whatsapp_profile/       # Browser session (auto-created)
-├── temp_media/             # Temporary media uploads (auto-created)
-└── README.md               # This file
+└── temp_media/             # Temporary media uploads (auto-created)
 ```
 
 ### How It Works
