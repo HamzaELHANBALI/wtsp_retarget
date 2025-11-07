@@ -518,7 +518,7 @@ Keep responses concise and helpful."""
 
                     if photos_clicked:
                         print("✅ Clicked 'Photos & Videos' (via JavaScript)")
-                        time.sleep(1.5)
+                        time.sleep(2.5)  # Increased wait for file input to be created
 
                 if not photos_clicked:
                     print("⚠️  Could not find 'Photos & Videos' button, trying direct file input")
@@ -526,7 +526,7 @@ Keep responses concise and helpful."""
 
             # Find file input - IMPORTANT: Wait longer for Finder to open and file input to be ready
             print("📂 Looking for file input...")
-            time.sleep(2)  # Increased wait for file picker to fully load
+            time.sleep(3)  # Increased wait for file picker to fully load
 
             # Try to find the file input (it appears after clicking attach or Photos & Videos)
             # For videos, we want the file input that accepts video files
@@ -577,19 +577,49 @@ Keep responses concise and helpful."""
                     continue
 
             if not file_input:
-                # Last resort: wait for any file input to appear
+                # Last resort: wait for any file input to appear and filter properly
                 try:
-                    file_input = self.wait.until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='file']"))
-                    )
-                    accept_attr = file_input.get_attribute('accept') or 'any'
-                    print(f"✅ Found file input (fallback) - Accepts: {accept_attr}")
+                    print("🔄 Waiting for file inputs to load...")
+                    time.sleep(2)  # Give more time for inputs to appear
 
-                    # Warn if video but input only accepts images
-                    if is_video and 'video' not in accept_attr and 'image' in accept_attr:
-                        print("⚠️  WARNING: Video file but input only accepts images - upload may fail!")
-                except:
-                    raise Exception("Could not find file input element")
+                    # Get ALL file inputs and find the best match
+                    all_inputs = self.driver.find_elements(By.CSS_SELECTOR, "input[type='file']")
+
+                    if not all_inputs:
+                        raise Exception("No file inputs found")
+
+                    print(f"   Found {len(all_inputs)} file input(s), checking compatibility...")
+
+                    for inp in reversed(all_inputs):  # Check newest first
+                        try:
+                            if not inp.is_enabled():
+                                continue
+
+                            accept_attr = inp.get_attribute('accept') or ''
+
+                            # For videos, REJECT image-only inputs
+                            if is_video:
+                                if accept_attr and 'video' not in accept_attr and 'image' in accept_attr:
+                                    print(f"   ❌ Skipping image-only input: {accept_attr}")
+                                    continue
+                                # Accept inputs that explicitly allow video OR have no restrictions
+                                if not accept_attr or 'video' in accept_attr or ('image' not in accept_attr):
+                                    file_input = inp
+                                    print(f"✅ Found suitable file input - Accepts: {accept_attr or 'any file type'}")
+                                    break
+                            else:
+                                # For images/documents, any input is fine
+                                file_input = inp
+                                print(f"✅ Found file input - Accepts: {accept_attr or 'any file type'}")
+                                break
+                        except:
+                            continue
+
+                    if not file_input:
+                        raise Exception(f"Could not find suitable file input for {'video' if is_video else 'file'}")
+
+                except Exception as e:
+                    raise Exception(f"Could not find file input element: {str(e)}")
 
             # STEP 3: Send file path to input
             # This will close Finder and upload the file with the caption we typed earlier
