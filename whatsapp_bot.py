@@ -332,134 +332,120 @@ Keep responses concise and helpful."""
             is_video = file_ext in ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.flv', '.wmv', '.3gp']
 
             if is_video:
-                print(f"🎬 Using drag-and-drop for video (ensures preview)")
+                print(f"🎬 Sending video with preview")
             else:
-                print(f"🖼️ Attaching image")
+                print(f"🖼️ Sending image")
 
-            # Method 1: Try drag-and-drop for videos (shows preview)
-            if is_video:
+            # Click attachment button - try multiple selectors
+            print("📎 Opening attachment menu...")
+
+            attach_selectors = [
+                "[data-icon='plus']",  # Plus icon (new WhatsApp UI)
+                "[data-icon='clip']",  # Clip icon
+                "[aria-label='Attach']",  # Aria label
+                "span[data-icon='plus']",
+                "span[data-icon='clip']",
+                "button[aria-label='Attach']",
+            ]
+
+            attach_btn = None
+            for selector in attach_selectors:
                 try:
-                    # Find the message input area for drag-and-drop
-                    input_box = self.wait.until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, "[contenteditable='true'][data-tab='10']"))
-                    )
+                    attach_btn = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    if attach_btn and attach_btn.is_displayed():
+                        attach_btn.click()
+                        print(f"✅ Opened attachment menu (selector: {selector})")
+                        break
+                except:
+                    continue
 
-                    # Use JavaScript to simulate drag-and-drop (this ensures video preview)
-                    self.driver.execute_script("""
-                        async function dropFile(element, filePath) {
-                            // Read file using file input
-                            const input = document.createElement('input');
-                            input.type = 'file';
-                            input.style.display = 'none';
-                            document.body.appendChild(input);
-
-                            // Wait for file to be selected
-                            const file = await new Promise((resolve) => {
-                                input.onchange = (e) => {
-                                    resolve(e.target.files[0]);
-                                };
-                                input.value = '';
-                                // Note: Can't programmatically set file, will use input.files approach
-                            });
-
-                            // Alternative: Direct file input send
-                            return false;
+            if not attach_btn:
+                # Try JavaScript fallback
+                clicked = self.driver.execute_script("""
+                    const selectors = [
+                        '[data-icon="plus"]',
+                        '[data-icon="clip"]',
+                        '[aria-label*="Attach"]',
+                        'button[aria-label*="Attach"]'
+                    ];
+                    for (const sel of selectors) {
+                        const btn = document.querySelector(sel);
+                        if (btn) {
+                            btn.click();
+                            return true;
                         }
+                    }
+                    return false;
+                """)
 
-                        // Try to get file input for Photos & Videos
-                        const inputs = document.querySelectorAll('input[type="file"]');
-                        return inputs.length;
-                    """)
+                if clicked:
+                    print("✅ Opened attachment menu (via JavaScript)")
+                else:
+                    raise Exception("Could not find attachment button")
 
-                    # Fallback: Use file input with Photos & Videos option
-                    print("📎 Opening attachment menu...")
+            time.sleep(1.5)
 
-                    # Click attachment button
-                    attach_btn = self.wait.until(
-                        EC.element_to_be_clickable((By.CSS_SELECTOR, "[data-icon='attach-menu-plus'], [data-icon='clip'], [data-testid='clip']"))
-                    )
-                    attach_btn.click()
-                    time.sleep(1.5)
+            # Now find and click "Photos & Videos" for video preview
+            if is_video:
+                print("🎥 Selecting 'Photos & Videos' option...")
 
-                    # Find and click "Photos & Videos" option (NOT document)
-                    print("🎥 Selecting 'Photos & Videos' option...")
-                    photos_videos_clicked = False
+                # Method 1: Try to find and click the Photos & Videos menu item
+                photos_clicked = self.driver.execute_script("""
+                    // Look for menu items
+                    const items = Array.from(document.querySelectorAll('li, div[role="button"], span[role="button"]'));
 
-                    # Try multiple selectors for Photos & Videos button
-                    selectors = [
-                        "input[accept*='image'][accept*='video']",  # File input that accepts both
-                        "[data-testid='media-input']",
-                        "li[data-testid='mi-attach-media'] input",
-                    ]
+                    for (const item of items) {
+                        const text = (item.textContent || '').toLowerCase();
+                        const label = (item.getAttribute('aria-label') || '').toLowerCase();
 
-                    for selector in selectors:
-                        try:
-                            file_input = self.driver.find_element(By.CSS_SELECTOR, selector)
-                            if file_input:
-                                file_input.send_keys(abs_path)
-                                photos_videos_clicked = True
-                                print("✅ Photos & Videos option selected")
-                                break
-                        except:
-                            continue
+                        // Check if it contains both "photo" and "video"
+                        if ((text.includes('photo') && text.includes('video')) ||
+                            (label.includes('photo') && label.includes('video')) ||
+                            text.includes('photos & videos') ||
+                            label.includes('photos & videos')) {
+                            item.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                """)
 
-                    # If specific input not found, try to click Photos & Videos button then use input
-                    if not photos_videos_clicked:
-                        try:
-                            # Look for Photos & Videos button by text or icon
-                            photos_btn = self.driver.execute_script("""
-                                // Find button with "Photos" or "Videos" text or appropriate icon
-                                const buttons = Array.from(document.querySelectorAll('li[role="button"], span[role="button"], button'));
-                                const photosBtn = buttons.find(btn => {
-                                    const text = btn.textContent || btn.innerText || '';
-                                    const ariaLabel = btn.getAttribute('aria-label') || '';
-                                    return (text.toLowerCase().includes('photo') && text.toLowerCase().includes('video')) ||
-                                           (ariaLabel.toLowerCase().includes('photo') && ariaLabel.toLowerCase().includes('video'));
-                                });
-                                if (photosBtn) {
-                                    photosBtn.click();
-                                    return true;
-                                }
-                                return false;
-                            """)
+                if photos_clicked:
+                    print("✅ Clicked 'Photos & Videos'")
+                    time.sleep(1)
+                else:
+                    print("⚠️  Could not find 'Photos & Videos' button, trying direct file input")
 
-                            if photos_btn:
-                                print("✅ Clicked Photos & Videos button")
-                                time.sleep(1)
+            # Find file input
+            print("📂 Looking for file input...")
+            time.sleep(1)
 
-                            # Now find file input
-                            file_input = self.wait.until(
-                                EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='file']"))
-                            )
-                            file_input.send_keys(abs_path)
-                            photos_videos_clicked = True
+            # Try to find the file input (it appears after clicking attach or Photos & Videos)
+            file_input_selectors = [
+                "input[type='file'][accept*='image']",
+                "input[type='file'][accept*='video']",
+                "input[type='file']"
+            ]
 
-                        except Exception as e:
-                            print(f"⚠️ Could not select Photos & Videos option: {e}")
+            file_input = None
+            for selector in file_input_selectors:
+                try:
+                    inputs = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    # Get the last one (usually the most recently added)
+                    if inputs:
+                        file_input = inputs[-1]
+                        break
+                except:
+                    continue
 
-                    if not photos_videos_clicked:
-                        print("⚠️ Using fallback file input (video might send as document)")
-                        file_input = self.wait.until(
-                            EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='file']"))
-                        )
-                        file_input.send_keys(abs_path)
-
-                except Exception as e:
-                    print(f"⚠️ Drag-and-drop method failed: {e}")
-                    raise
-
-            else:
-                # For images, standard method works fine
-                attach_btn = self.wait.until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, "[data-icon='attach-menu-plus'], [data-icon='clip']"))
-                )
-                attach_btn.click()
-                time.sleep(1)
-
+            if not file_input:
                 file_input = self.wait.until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='file']"))
                 )
-                file_input.send_keys(abs_path)
+
+            # Send file
+            file_input.send_keys(abs_path)
+            print(f"✅ File uploaded: {Path(media_path).name}")
 
             print("⏳ Uploading media...")
             time.sleep(4)  # Wait for upload
