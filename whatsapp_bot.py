@@ -58,11 +58,32 @@ class WhatsAppBot:
 
         if api_key:
             try:
-                self.openai_client = OpenAI(api_key=api_key)
+                # Initialize OpenAI client with explicit parameters only
+                # Avoid any proxy or environment variable issues
+                self.openai_client = OpenAI(
+                    api_key=api_key,
+                    timeout=60.0,
+                    max_retries=2
+                )
                 self.ai_enabled = True
                 print("✅ OpenAI API configured")
+            except TypeError as e:
+                # Handle version mismatch or unexpected argument errors
+                print(f"⚠️  OpenAI initialization failed: {e}")
+                print("   Trying alternative initialization...")
+                try:
+                    # Fallback: minimal initialization
+                    self.openai_client = OpenAI(api_key=api_key)
+                    self.ai_enabled = True
+                    print("✅ OpenAI API configured (fallback method)")
+                except Exception as e2:
+                    print(f"⚠️  OpenAI initialization failed: {e2}")
+                    print("   Try: pip install --upgrade openai")
+                    self.ai_enabled = False
             except Exception as e:
                 print(f"⚠️  OpenAI initialization failed: {e}")
+                print("   AI responses will be disabled")
+                self.ai_enabled = False
         else:
             print("⚠️  OpenAI API key not found. AI responses disabled.")
             print("   Add OPENAI_API_KEY to .env file to enable AI responses")
