@@ -92,20 +92,37 @@ def auto_add_to_monitoring(phone):
 def check_and_respond_to_messages():
     """Check all monitored contacts for new messages and respond"""
     if not st.session_state.bot:
+        print("⚠️  No bot instance found")
         return []
+
+    print(f"\n{'='*60}")
+    print(f"🔍 Checking {len(st.session_state.monitored_contacts)} monitored contact(s)...")
+    print(f"{'='*60}")
 
     responses = []
     for phone in st.session_state.monitored_contacts:
         try:
+            print(f"\n--- Checking {phone} ---")
             # Check for new messages
             new_msg = st.session_state.bot.get_new_messages(phone)
 
             if new_msg:
+                print(f"✨ NEW MESSAGE DETECTED!")
+                print(f"   From: {phone}")
+                print(f"   Message: {new_msg[:100]}...")
+
                 # Generate AI response
+                print(f"📝 Generating AI response...")
                 ai_response = st.session_state.bot.generate_ai_response(new_msg, phone)
 
                 # Send response
+                print(f"📤 Sending AI response...")
                 send_success = st.session_state.bot.send_message(phone, ai_response)
+
+                if send_success:
+                    print(f"✅ Response sent successfully to {phone}")
+                else:
+                    print(f"❌ Failed to send response to {phone}")
 
                 responses.append({
                     'phone': phone,
@@ -115,6 +132,7 @@ def check_and_respond_to_messages():
                     'checked': True
                 })
             else:
+                print(f"ℹ️  No new messages from {phone}")
                 # No new message found - still track that we checked
                 responses.append({
                     'phone': phone,
@@ -124,12 +142,19 @@ def check_and_respond_to_messages():
                 })
 
         except Exception as e:
+            print(f"❌ ERROR checking/responding to {phone}: {e}")
+            import traceback
+            traceback.print_exc()
             responses.append({
                 'phone': phone,
                 'error': str(e),
                 'success': False,
                 'checked': True
             })
+
+    print(f"\n{'='*60}")
+    print(f"✅ Check complete. Processed {len(responses)} contact(s)")
+    print(f"{'='*60}\n")
     return responses
 
 # Helper functions (existing)

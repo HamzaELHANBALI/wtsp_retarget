@@ -97,7 +97,8 @@ Keep responses concise and helpful."""
 
         # Conversation tracking
         self.conversations: Dict[str, List[Dict]] = {}
-        self.last_messages: Dict[str, str] = {}
+        self.last_messages: Dict[str, str] = {}  # Legacy text-based tracking
+        self.seen_message_ids: Dict[str, set] = {}  # New ID-based tracking
         self.monitored_contacts: List[str] = []
 
         # Statistics
@@ -344,6 +345,25 @@ Keep responses concise and helpful."""
         try:
             print(f"📎 Attaching media: {Path(media_path).name}")
 
+            # CRITICAL: Ensure window is visible and focused
+            # File uploads don't work reliably when window is minimized/background
+            print("🔍 Ensuring browser window is visible and focused...")
+            try:
+                # Maximize window (brings it to front)
+                self.driver.maximize_window()
+
+                # Switch to WhatsApp tab if not already active
+                self.driver.switch_to.window(self.driver.current_window_handle)
+
+                # Bring window to front using JavaScript (platform-independent)
+                self.driver.execute_script("window.focus();")
+
+                time.sleep(0.5)  # Brief pause for window manager
+                print("✅ Window focused and ready")
+            except Exception as focus_err:
+                print(f"⚠️  Could not focus window: {focus_err}")
+                print("   File upload may fail if browser is minimized")
+
             # Get absolute path
             abs_path = str(Path(media_path).absolute())
 
@@ -518,7 +538,7 @@ Keep responses concise and helpful."""
 
                     if photos_clicked:
                         print("✅ Clicked 'Photos & Videos' (via JavaScript)")
-                        time.sleep(1.5)
+                        time.sleep(2.5)  # Increased wait for file input to be created
 
                 if not photos_clicked:
                     print("⚠️  Could not find 'Photos & Videos' button, trying direct file input")
@@ -526,7 +546,7 @@ Keep responses concise and helpful."""
 
             # Find file input - IMPORTANT: Wait longer for Finder to open and file input to be ready
             print("📂 Looking for file input...")
-            time.sleep(2)  # Increased wait for file picker to fully load
+            time.sleep(3)  # Increased wait for file picker to fully load
 
             # Try to find the file input (it appears after clicking attach or Photos & Videos)
             # For videos, we want the file input that accepts video files
@@ -558,10 +578,17 @@ Keep responses concise and helpful."""
                                     # Check accept attribute
                                     accept_attr = inp.get_attribute('accept') or ''
 
-                                    # For videos, skip if it ONLY accepts images
+                                    # For videos, MODIFY if it ONLY accepts images
                                     if is_video and accept_attr and 'video' not in accept_attr and 'image' in accept_attr:
-                                        print(f"   Skipping image-only input: {accept_attr}")
-                                        continue
+                                        print(f"   🔧 Found image-only input: {accept_attr}")
+                                        print(f"   🔧 Modifying to accept videos...")
+                                        # Use JavaScript to modify the accept attribute
+                                        self.driver.execute_script(
+                                            "arguments[0].setAttribute('accept', 'image/*,video/*');",
+                                            inp
+                                        )
+                                        accept_attr = inp.get_attribute('accept')
+                                        print(f"   ✅ Modified to: {accept_attr}")
 
                                     file_input = inp
                                     found_selector = selector
@@ -569,7 +596,8 @@ Keep responses concise and helpful."""
                                     if accept_attr:
                                         print(f"   Accepts: {accept_attr}")
                                     break
-                            except:
+                            except Exception as ex:
+                                print(f"   ⚠️  Error: {str(ex)}")
                                 continue
                         if file_input:
                             break
@@ -577,19 +605,59 @@ Keep responses concise and helpful."""
                     continue
 
             if not file_input:
-                # Last resort: wait for any file input to appear
+                # Last resort: wait for any file input to appear and filter properly
                 try:
-                    file_input = self.wait.until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='file']"))
-                    )
-                    accept_attr = file_input.get_attribute('accept') or 'any'
-                    print(f"✅ Found file input (fallback) - Accepts: {accept_attr}")
+                    print("🔄 Waiting for file inputs to load...")
+                    time.sleep(2)  # Give more time for inputs to appear
 
-                    # Warn if video but input only accepts images
-                    if is_video and 'video' not in accept_attr and 'image' in accept_attr:
-                        print("⚠️  WARNING: Video file but input only accepts images - upload may fail!")
-                except:
-                    raise Exception("Could not find file input element")
+                    # Get ALL file inputs and find the best match
+                    all_inputs = self.driver.find_elements(By.CSS_SELECTOR, "input[type='file']")
+
+                    if not all_inputs:
+                        raise Exception("No file inputs found")
+
+                    print(f"   Found {len(all_inputs)} file input(s), checking compatibility...")
+
+                    for inp in reversed(all_inputs):  # Check newest first
+                        try:
+                            if not inp.is_enabled():
+                                continue
+
+                            accept_attr = inp.get_attribute('accept') or ''
+
+                            # For videos, MODIFY image-only inputs to accept videos
+                            if is_video:
+                                if accept_attr and 'video' not in accept_attr and 'image' in accept_attr:
+                                    print(f"   🔧 Found image-only input: {accept_attr}")
+                                    print(f"   🔧 Modifying to accept videos...")
+                                    # Use JavaScript to modify the accept attribute
+                                    self.driver.execute_script(
+                                        "arguments[0].setAttribute('accept', 'image/*,video/*');",
+                                        inp
+                                    )
+                                    new_accept = inp.get_attribute('accept')
+                                    print(f"   ✅ Modified accept attribute to: {new_accept}")
+                                    file_input = inp
+                                    break
+                                # Accept inputs that explicitly allow video OR have no restrictions
+                                elif not accept_attr or 'video' in accept_attr or ('image' not in accept_attr):
+                                    file_input = inp
+                                    print(f"✅ Found suitable file input - Accepts: {accept_attr or 'any file type'}")
+                                    break
+                            else:
+                                # For images/documents, any input is fine
+                                file_input = inp
+                                print(f"✅ Found file input - Accepts: {accept_attr or 'any file type'}")
+                                break
+                        except Exception as inner_ex:
+                            print(f"   ⚠️  Error checking input: {str(inner_ex)}")
+                            continue
+
+                    if not file_input:
+                        raise Exception(f"Could not find suitable file input for {'video' if is_video else 'file'}")
+
+                except Exception as e:
+                    raise Exception(f"Could not find file input element: {str(e)}")
 
             # STEP 3: Send file path to input
             # This will close Finder and upload the file with the caption we typed earlier
@@ -816,6 +884,13 @@ Keep responses concise and helpful."""
             phone = self._format_phone(phone)
             print(f"🔍 Checking messages from {phone}...")
 
+            # Ensure window is visible (message detection can fail when minimized)
+            try:
+                self.driver.maximize_window()
+                self.driver.execute_script("window.focus();")
+            except:
+                pass  # Not critical for message checking
+
             # Open chat
             url = f"https://web.whatsapp.com/send?phone={phone.replace('+', '')}"
             self.driver.get(url)
@@ -859,19 +934,46 @@ Keep responses concise and helpful."""
                 print("💡 Tip: Make sure the chat exists and WhatsApp Web is properly loaded")
                 return None
 
-            # Give extra time for messages to fully render
-            time.sleep(2)
+            # Scroll to ensure all recent messages are loaded
+            print("📜 Scrolling to load recent messages...")
+            try:
+                self.driver.execute_script("""
+                    // Find the message container and scroll to bottom
+                    const msgContainer = document.querySelector('[data-testid="conversation-panel-body"]') ||
+                                        document.querySelector('[data-testid="conversation-panel-messages"]');
+                    if (msgContainer) {
+                        msgContainer.scrollTop = msgContainer.scrollHeight;
+                        console.log('Scrolled to bottom of messages');
+                    } else {
+                        console.log('Could not find message container to scroll');
+                    }
+                """)
+                time.sleep(2)  # Increased: Wait for messages to render after scroll
+            except Exception as scroll_err:
+                print(f"⚠️  Could not scroll: {scroll_err}")
+
+            # Give EXTRA time for messages to fully render (critical for minimized window)
+            print("⏳ Waiting for messages to render...")
+            time.sleep(2.5)  # Increased from 1.5s
 
             # Try multiple strategies to find incoming messages
             last_msg = None
             all_incoming = []
 
-            # Strategy 1: Use JavaScript to find incoming messages more reliably
-            result = self.driver.execute_script("""
-                // Find all message bubbles
-                const messageContainers = document.querySelectorAll('[data-testid="msg-container"]');
+            # Strategy 1: Use JavaScript to find incoming messages with timestamps/IDs
+            # This is MORE ROBUST - tracks messages by their unique attributes
+            result = self.driver.execute_script(r"""
+                console.log('Starting message detection...');
 
-                console.log('Total message containers:', messageContainers.length);
+                // Try multiple selectors for message containers
+                let messageContainers = document.querySelectorAll('[data-testid="msg-container"]');
+                console.log('Method 1 - Found containers with [data-testid="msg-container"]:', messageContainers.length);
+
+                // Fallback: try alternative selectors
+                if (messageContainers.length === 0) {
+                    messageContainers = document.querySelectorAll('div[data-id]');
+                    console.log('Method 2 - Found containers with div[data-id]:', messageContainers.length);
+                }
 
                 // Filter for incoming messages (not sent by us)
                 const incomingMessages = [];
@@ -882,6 +984,7 @@ Keep responses concise and helpful."""
                     const msgDiv = container.querySelector('[class*="message-in"]');
 
                     if (msgDiv) {
+                        console.log('Found incoming message element');
                         // Get the text content - try multiple selectors
                         let text = null;
 
@@ -912,28 +1015,80 @@ Keep responses concise and helpful."""
                         }
 
                         if (text && text.trim()) {
-                            incomingMessages.push(text.trim());
+                            // Get timestamp if available
+                            let timestamp = null;
+                            const timeEl = container.querySelector('[data-testid="msg-meta"]') ||
+                                          container.querySelector('span[class*="timestamp"]') ||
+                                          container.querySelector('div[data-pre-plain-text]');
+                            if (timeEl) {
+                                timestamp = timeEl.textContent || timeEl.getAttribute('data-pre-plain-text');
+                            }
+
+                            // Create unique ID from message content + timestamp
+                            const msgId = container.getAttribute('data-id') ||
+                                         (text.substring(0, 50) + (timestamp || '')).replace(/\s/g, '');
+
+                            incomingMessages.push({
+                                text: text.trim(),
+                                timestamp: timestamp,
+                                id: msgId
+                            });
                         }
                     }
                 }
 
                 console.log('Incoming messages found:', incomingMessages.length);
 
-                // Return all incoming messages and the last one
+                // Return all incoming messages
                 return {
-                    all: incomingMessages,
-                    last: incomingMessages.length > 0 ? incomingMessages[incomingMessages.length - 1] : null,
+                    messages: incomingMessages,
                     count: incomingMessages.length
                 };
             """)
 
             if result:
-                all_incoming = result.get('all', [])
-                last_msg = result.get('last')
+                messages = result.get('messages', [])
                 msg_count = result.get('count', 0)
-                print(f"📨 Found {msg_count} incoming messages from {phone}")
-                if all_incoming:
-                    print(f"💬 Last incoming message: {last_msg[:50]}..." if last_msg and len(last_msg) > 50 else f"💬 Last incoming message: {last_msg}")
+                print(f"📨 JavaScript found {msg_count} incoming messages in chat with {phone}")
+                if msg_count == 0:
+                    print("⚠️  JavaScript found 0 messages - will try fallback method")
+
+                # Get seen message IDs for this phone
+                if not hasattr(self, 'seen_message_ids'):
+                    self.seen_message_ids = {}
+                if phone not in self.seen_message_ids:
+                    self.seen_message_ids[phone] = set()
+
+                # Find NEW messages (ones we haven't seen before)
+                new_messages = []
+                for msg in messages:
+                    msg_id = msg.get('id', '')
+                    msg_text = msg.get('text', '')
+                    if msg_id and msg_id not in self.seen_message_ids[phone]:
+                        new_messages.append(msg)
+                        print(f"  ✨ NEW: {msg_text[:60]}..." if len(msg_text) > 60 else f"  ✨ NEW: {msg_text}")
+
+                # If we found new messages, mark them as seen and return the FIRST new one
+                if new_messages:
+                    # Mark ALL new messages as seen
+                    for msg in new_messages:
+                        self.seen_message_ids[phone].add(msg.get('id', ''))
+
+                    # Keep only last 100 message IDs to avoid memory bloat
+                    if len(self.seen_message_ids[phone]) > 100:
+                        # Convert to list, keep last 100, convert back to set
+                        self.seen_message_ids[phone] = set(list(self.seen_message_ids[phone])[-100:])
+
+                    # Return the FIRST new message (oldest unread)
+                    last_msg = new_messages[0].get('text', '')
+                    print(f"✨ Returning FIRST new message from {phone}: {last_msg[:100]}...")
+
+                    # Also update the old tracking for backward compatibility
+                    if last_msg:
+                        self.last_messages[phone] = last_msg
+                else:
+                    print(f"ℹ️  All messages already seen")
+                    all_incoming = []  # Clear to trigger fallback
 
             # Strategy 2: Fallback using Selenium if JavaScript method fails
             if not last_msg:
@@ -953,7 +1108,15 @@ Keep responses concise and helpful."""
                             last_msg = messages[-1].text.strip()
                             print(f"✅ Found message with selector: {selector}")
                             if last_msg:
-                                break
+                                # Use text-based tracking as fallback
+                                last_seen = self.last_messages.get(phone, "")
+                                if last_msg != last_seen:
+                                    self.last_messages[phone] = last_msg
+                                    print(f"✨ NEW MESSAGE from {phone}: {last_msg[:100]}...")
+                                    return last_msg
+                                else:
+                                    print(f"ℹ️  No new messages (already seen)")
+                                    return None
                     except Exception as sel_err:
                         continue
 
@@ -961,20 +1124,8 @@ Keep responses concise and helpful."""
                 print(f"ℹ️  No new messages from {phone}")
                 return None
 
-            # Check if it's new
-            last_seen = self.last_messages.get(phone, "")
-
-            print(f"📝 Last seen message: {last_seen[:50]}..." if last_seen and len(last_seen) > 50 else f"📝 Last seen message: {last_seen}")
-            print(f"📝 Current message: {last_msg[:50]}..." if last_msg and len(last_msg) > 50 else f"📝 Current message: {last_msg}")
-
-            if last_msg and last_msg != last_seen:
-                self.last_messages[phone] = last_msg
-                print(f"✨ NEW MESSAGE from {phone}: {last_msg[:100]}...")
-                return last_msg
-            else:
-                print(f"ℹ️  No new messages (already seen)")
-
-            return None
+            # If we got here, last_msg is already set from the ID-based method
+            return last_msg
 
         except Exception as e:
             print(f"⚠️  Error checking messages from {phone}: {e}")
@@ -993,12 +1144,22 @@ Keep responses concise and helpful."""
         Returns:
             AI-generated response
         """
+        import sys
+        print(f"\n🤖 Generating AI response for message from {phone}...", flush=True)
+        sys.stdout.flush()  # Force immediate output
+        print(f"   Customer: {message[:100]}..." if len(message) > 100 else f"   Customer: {message}", flush=True)
+        sys.stdout.flush()
+
         if not self.ai_enabled:
+            print("⚠️  AI not enabled - using default response", flush=True)
+            sys.stdout.flush()
             return "Thank you for your message. We'll get back to you soon."
 
         try:
             # Get conversation history
             history = self.conversations.get(phone, [])
+            print(f"   Using {len(history)} previous messages as context", flush=True)
+            sys.stdout.flush()
 
             # Build messages for API
             messages = [
@@ -1011,15 +1172,24 @@ Keep responses concise and helpful."""
             # Add current message
             messages.append({"role": "user", "content": message})
 
-            # Call OpenAI API
+            print(f"   Calling OpenAI {self.model}...", flush=True)
+            sys.stdout.flush()
+
+            # Call OpenAI API with explicit timeout
             response = self.openai_client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 temperature=0.7,
-                max_tokens=200
+                max_tokens=200,
+                timeout=30.0  # 30 second timeout
             )
 
+            print(f"   ✅ Received response from OpenAI", flush=True)
+            sys.stdout.flush()
+
             ai_response = response.choices[0].message.content.strip()
+            print(f"✅ AI Response generated: {ai_response[:100]}..." if len(ai_response) > 100 else f"✅ AI Response: {ai_response}", flush=True)
+            sys.stdout.flush()
 
             # Update conversation history
             if phone not in self.conversations:
@@ -1032,11 +1202,44 @@ Keep responses concise and helpful."""
             if len(self.conversations[phone]) > 20:
                 self.conversations[phone] = self.conversations[phone][-20:]
 
+            print(f"   Conversation history updated ({len(self.conversations[phone])} messages)", flush=True)
+            sys.stdout.flush()
             return ai_response
 
         except Exception as e:
-            print(f"⚠️  AI response error: {e}")
+            print(f"⚠️  AI response error: {e}", flush=True)
+            sys.stdout.flush()
+            import traceback
+            traceback.print_exc()
+            sys.stdout.flush()
             return "Thank you for your message. We'll get back to you soon."
+
+    def initialize_message_tracking(self, phone: str):
+        """
+        Mark all existing messages from a contact as "seen" to avoid responding to old messages.
+        Call this when you start monitoring a new contact.
+
+        Args:
+            phone: Phone number to initialize tracking for
+        """
+        try:
+            phone = self._format_phone(phone)
+            print(f"🔄 Initializing message tracking for {phone}...")
+
+            # Open chat
+            url = f"https://web.whatsapp.com/send?phone={phone.replace('+', '')}"
+            self.driver.get(url)
+            time.sleep(5)
+
+            # Use get_new_messages to populate seen_message_ids without returning anything
+            # This will mark all current messages as "seen"
+            _ = self.get_new_messages(phone)
+
+            print(f"✅ Message tracking initialized for {phone}")
+            print(f"   {len(self.seen_message_ids.get(phone, set()))} messages marked as seen")
+
+        except Exception as e:
+            print(f"⚠️  Error initializing tracking for {phone}: {e}")
 
     def monitor_and_respond(self, check_interval: int = 10, duration: Optional[int] = None):
         """
