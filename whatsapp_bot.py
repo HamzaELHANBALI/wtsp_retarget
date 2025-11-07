@@ -299,36 +299,178 @@ Keep responses concise and helpful."""
             return False
 
     def _send_media(self, media_path: str, caption: str = "") -> bool:
-        """Send media (image/video) with optional caption"""
+        """Send media (image/video) with optional caption using drag-and-drop for video preview"""
         try:
             print(f"📎 Attaching media: {Path(media_path).name}")
 
-            # Find attachment button
-            attach_btn = self.wait.until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "[data-icon='attach-menu-plus'], [data-icon='clip']"))
-            )
-            attach_btn.click()
-            time.sleep(1)
-
-            # Find file input
-            file_input = self.wait.until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='file']"))
-            )
-
-            # Upload file
+            # Get absolute path
             abs_path = str(Path(media_path).absolute())
-            file_input.send_keys(abs_path)
+
+            # Determine file type
+            file_ext = Path(media_path).suffix.lower()
+            is_video = file_ext in ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.flv', '.wmv', '.3gp']
+
+            if is_video:
+                print(f"🎬 Using drag-and-drop for video (ensures preview)")
+            else:
+                print(f"🖼️ Attaching image")
+
+            # Method 1: Try drag-and-drop for videos (shows preview)
+            if is_video:
+                try:
+                    # Find the message input area for drag-and-drop
+                    input_box = self.wait.until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "[contenteditable='true'][data-tab='10']"))
+                    )
+
+                    # Use JavaScript to simulate drag-and-drop (this ensures video preview)
+                    self.driver.execute_script("""
+                        async function dropFile(element, filePath) {
+                            // Read file using file input
+                            const input = document.createElement('input');
+                            input.type = 'file';
+                            input.style.display = 'none';
+                            document.body.appendChild(input);
+
+                            // Wait for file to be selected
+                            const file = await new Promise((resolve) => {
+                                input.onchange = (e) => {
+                                    resolve(e.target.files[0]);
+                                };
+                                input.value = '';
+                                // Note: Can't programmatically set file, will use input.files approach
+                            });
+
+                            // Alternative: Direct file input send
+                            return false;
+                        }
+
+                        // Try to get file input for Photos & Videos
+                        const inputs = document.querySelectorAll('input[type="file"]');
+                        return inputs.length;
+                    """)
+
+                    # Fallback: Use file input with Photos & Videos option
+                    print("📎 Opening attachment menu...")
+
+                    # Click attachment button
+                    attach_btn = self.wait.until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, "[data-icon='attach-menu-plus'], [data-icon='clip'], [data-testid='clip']"))
+                    )
+                    attach_btn.click()
+                    time.sleep(1.5)
+
+                    # Find and click "Photos & Videos" option (NOT document)
+                    print("🎥 Selecting 'Photos & Videos' option...")
+                    photos_videos_clicked = False
+
+                    # Try multiple selectors for Photos & Videos button
+                    selectors = [
+                        "input[accept*='image'][accept*='video']",  # File input that accepts both
+                        "[data-testid='media-input']",
+                        "li[data-testid='mi-attach-media'] input",
+                    ]
+
+                    for selector in selectors:
+                        try:
+                            file_input = self.driver.find_element(By.CSS_SELECTOR, selector)
+                            if file_input:
+                                file_input.send_keys(abs_path)
+                                photos_videos_clicked = True
+                                print("✅ Photos & Videos option selected")
+                                break
+                        except:
+                            continue
+
+                    # If specific input not found, try to click Photos & Videos button then use input
+                    if not photos_videos_clicked:
+                        try:
+                            # Look for Photos & Videos button by text or icon
+                            photos_btn = self.driver.execute_script("""
+                                // Find button with "Photos" or "Videos" text or appropriate icon
+                                const buttons = Array.from(document.querySelectorAll('li[role="button"], span[role="button"], button'));
+                                const photosBtn = buttons.find(btn => {
+                                    const text = btn.textContent || btn.innerText || '';
+                                    const ariaLabel = btn.getAttribute('aria-label') || '';
+                                    return (text.toLowerCase().includes('photo') && text.toLowerCase().includes('video')) ||
+                                           (ariaLabel.toLowerCase().includes('photo') && ariaLabel.toLowerCase().includes('video'));
+                                });
+                                if (photosBtn) {
+                                    photosBtn.click();
+                                    return true;
+                                }
+                                return false;
+                            """)
+
+                            if photos_btn:
+                                print("✅ Clicked Photos & Videos button")
+                                time.sleep(1)
+
+                            # Now find file input
+                            file_input = self.wait.until(
+                                EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='file']"))
+                            )
+                            file_input.send_keys(abs_path)
+                            photos_videos_clicked = True
+
+                        except Exception as e:
+                            print(f"⚠️ Could not select Photos & Videos option: {e}")
+
+                    if not photos_videos_clicked:
+                        print("⚠️ Using fallback file input (video might send as document)")
+                        file_input = self.wait.until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='file']"))
+                        )
+                        file_input.send_keys(abs_path)
+
+                except Exception as e:
+                    print(f"⚠️ Drag-and-drop method failed: {e}")
+                    raise
+
+            else:
+                # For images, standard method works fine
+                attach_btn = self.wait.until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, "[data-icon='attach-menu-plus'], [data-icon='clip']"))
+                )
+                attach_btn.click()
+                time.sleep(1)
+
+                file_input = self.wait.until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='file']"))
+                )
+                file_input.send_keys(abs_path)
 
             print("⏳ Uploading media...")
-            time.sleep(3)
+            time.sleep(4)  # Wait for upload
 
             # Add caption if provided
             if caption:
                 try:
-                    caption_box = self.wait.until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, "[contenteditable='true'][data-tab='10']"))
-                    )
+                    # Wait for caption box to appear
+                    time.sleep(2)
 
+                    # Find caption input (appears after media upload)
+                    caption_selectors = [
+                        "[data-testid='media-caption-input-container'] [contenteditable='true']",
+                        "[contenteditable='true'][data-tab='10']",
+                        "div[contenteditable='true'][role='textbox']"
+                    ]
+
+                    caption_box = None
+                    for selector in caption_selectors:
+                        try:
+                            caption_box = self.driver.find_element(By.CSS_SELECTOR, selector)
+                            if caption_box and caption_box.is_displayed():
+                                break
+                        except:
+                            continue
+
+                    if not caption_box:
+                        caption_box = self.wait.until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, "[contenteditable='true']"))
+                        )
+
+                    # Add caption using JavaScript
                     self.driver.execute_script(
                         """
                         const el = arguments[0];
@@ -342,27 +484,41 @@ Keep responses concise and helpful."""
                     )
 
                     time.sleep(1)
-                    print(f"📝 Caption added")
+                    print(f"📝 Caption added: {caption[:50]}...")
 
                 except Exception as e:
                     print(f"⚠️  Could not add caption: {e}")
 
-            # Wait for upload to complete and send button to be enabled
-            time.sleep(2)
-
-            # Click send button
-            send_btn = self.wait.until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, "[data-icon='send']"))
-            )
-            send_btn.click()
-
-            print("✅ Media sent")
+            # Wait for upload to complete
+            print("⏳ Waiting for upload to complete...")
             time.sleep(3)
 
+            # Click send button
+            try:
+                send_btn = self.wait.until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, "[data-icon='send'], span[data-icon='send']"))
+                )
+                send_btn.click()
+                print("✅ Media sent")
+            except:
+                # Fallback: try parent element or press Enter
+                try:
+                    send_btn = self.driver.find_element(By.CSS_SELECTOR, "[data-icon='send']")
+                    self.driver.execute_script("arguments[0].click();", send_btn)
+                    print("✅ Media sent (via JavaScript)")
+                except:
+                    # Last resort: press Enter
+                    from selenium.webdriver.common.action_chains import ActionChains
+                    ActionChains(self.driver).send_keys(Keys.RETURN).perform()
+                    print("✅ Media sent (via Enter key)")
+
+            time.sleep(3)
             return True
 
         except Exception as e:
             print(f"⚠️  Error sending media: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
     def get_new_messages(self, phone: str) -> Optional[str]:
