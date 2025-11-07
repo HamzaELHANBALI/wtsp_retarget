@@ -735,7 +735,8 @@ with st.sidebar:
                     st.session_state.bot = WhatsAppBot(
                         openai_api_key=openai_api_key if openai_api_key else None,
                         system_prompt=system_prompt,
-                        headless=False
+                        headless=False,
+                        contacts_df=st.session_state.contacts_df
                     )
                     st.session_state.logged_in = True
                     success_msg = "✅ Bot reconnected! Check the browser window." if has_saved_session else "✅ Bot initialized! You should see WhatsApp Web in a browser window."
@@ -1007,6 +1008,10 @@ with tab1:
                                 df['phone_formatted'] = df['phone']
 
                             st.session_state.contacts_df = df
+
+                            # Update bot's contacts_df if bot is already initialized
+                            if st.session_state.bot:
+                                st.session_state.bot.contacts_df = df
 
                             # Show preview
                             st.success(f"✅ Loaded {len(df)} contacts")
