@@ -10,8 +10,121 @@ A modern, reliable WhatsApp automation tool for bulk messaging and AI-powered cu
 - **🔐 Persistent Sessions**: Scan QR code once, session saved for future runs
 - **🌍 Multi-Language**: Supports Arabic and English (and other languages)
 - **📊 Statistics**: Track messages sent, AI responses, and conversations
+- **🎨 Streamlit UI**: Beautiful web interface for easy CSV uploads and management
 
-## 🚀 Quick Start
+## 🌟 NEW: Streamlit Web UI
+
+We now have a beautiful, user-friendly web interface! Perfect for non-technical users.
+
+### Quick Launch (Local)
+
+```bash
+# 1. Install dependencies (if not already done)
+pip install -r requirements.txt
+
+# 2. Set up API key in .env file (IMPORTANT!)
+cp .env.example .env
+nano .env  # Add your OpenAI API key
+
+# 3. Launch the web UI
+streamlit run streamlit_app.py
+```
+
+The app will open in your browser at `http://localhost:8501`
+
+**🔐 Security Note:** The app loads API keys from the `.env` file automatically. Never expose your API key in the UI when deploying! See [DEPLOYMENT.md](DEPLOYMENT.md) for production deployment instructions.
+
+### UI Features
+
+- **🧪 Test Message**: Send a test message to one number before bulk sending (NEW!)
+- **📤 CSV Upload**: Drag and drop your contacts CSV file
+- **✏️ Message Composer**: Write messages with variables (`{name}`, `{phone}`, `{custom_message}`)
+- **📎 Media Attachments**: Upload images and videos directly through the UI
+- **📊 Real-time Progress**: See messages being sent with live progress bars
+- **🤖 AI Monitoring Dashboard**: Track and view AI auto-responses in real-time
+- **⚙️ Easy Configuration**: Set API keys, delays, and system prompts without code
+- **📈 Analytics**: View statistics and success rates
+- **📥 Template Download**: Get a sample CSV template with one click
+
+### CSV Format for UI
+
+Your CSV should have these columns:
+
+| Column | Required | Description |
+|--------|----------|-------------|
+| `phone` | ✅ Yes | Phone number (with or without country code) |
+| `name` | ❌ Optional | Contact name (defaults to "Customer") |
+| `custom_message` | ❌ Optional | Custom message per contact |
+
+**Example CSV:**
+```csv
+phone,name,custom_message
++966501234567,Ahmed,Special 20% discount just for you!
+0502345678,Fatima,Thank you for being a loyal customer
+966503456789,Mohammed,
+```
+
+Download the `contacts_template.csv` file or use the download button in the UI.
+
+### 🧹 E-commerce CSV Cleaning (NEW!)
+
+Have messy order data from your store? The app now auto-cleans e-commerce CSVs!
+
+**Handles:**
+- ✅ Arabic numerals in phone numbers (٠٥٠٧٨٨٩٣٨٧ → +966507889387)
+- ✅ Various phone formats (spaces, dashes, country codes)
+- ✅ Mixed Arabic and English names
+- ✅ Automatic validation and removal of invalid numbers
+
+**How to use:**
+1. In the Streamlit app, select **"E-commerce Orders (auto-clean)"**
+2. Upload your order CSV (expected format: OrderDate, empty, name, phone, address, ...)
+3. The app automatically cleans and validates all data
+4. Send bulk messages to your customers!
+
+**Command-line option:**
+```bash
+python clean_order_csv.py "your_orders.csv"
+```
+
+See the [CSV Cleaning Guide](CSV_CLEANING_GUIDE.md) for detailed documentation.
+
+### 🧪 Test Before Bulk Sending (NEW!)
+
+Before sending to hundreds of contacts, always test first!
+
+**How to test:**
+1. In the **Bulk Messaging** tab, expand the **"Send Test Message to One Number"** section
+2. Enter your own phone number (or any test number)
+3. Write a test message (you can use {name} variables)
+4. Optionally attach media to test image/video sending
+5. Click **"Send Test Message"**
+6. Check your WhatsApp to verify it works!
+
+**Why test first:**
+- ✅ Verify your message looks good
+- ✅ Test media attachments
+- ✅ Check variables are working ({name}, etc.)
+- ✅ Confirm formatting and emojis render correctly
+- ✅ Make sure you're logged in and connected
+
+**Pro tip:** Send the test to your own number so you can see exactly what your customers will receive!
+
+### UI Screenshots
+
+The Streamlit UI includes:
+1. **Sidebar Configuration**: Set API keys, country codes, delays, and login status
+2. **Bulk Messaging Tab**:
+   - Test message section (send to one number first)
+   - CSV upload (standard or e-commerce format)
+   - Message composer with variables
+   - Media attachments
+   - Real-time bulk sending with progress
+3. **AI Auto-Responder Tab**: Select contacts to monitor and view live conversations
+4. **Analytics Tab**: View detailed statistics and success rates
+5. **Help Tab**: Complete documentation within the app
+
+## 🚀 Quick Start (Command Line)
 
 ### 1. Installation
 
@@ -258,10 +371,35 @@ print(stats)
 
 ## 🔒 Security & Privacy
 
+### API Key Security (IMPORTANT!)
+
+- **✅ DO:** Store API keys in `.env` file
+- **✅ DO:** Use environment variables for deployment
+- **❌ DON'T:** Hardcode API keys in code
+- **❌ DON'T:** Commit `.env` file to Git (already in .gitignore)
+- **❌ DON'T:** Enter API keys in web UI when deployed publicly
+
+**For Streamlit App:**
+- The app automatically loads `OPENAI_API_KEY` from `.env` file
+- If API key is in environment, it won't show input field
+- If no .env found, shows input (for local testing only)
+- **Always use .env file for production/deployment!**
+
+### Data Privacy
+
 - **API Keys**: Stored in `.env` (not committed to git)
 - **Session Data**: Stored locally in `whatsapp_profile/` (not uploaded)
 - **Conversations**: Stored in memory only (not persisted to disk)
 - **Data Sharing**: No data sent anywhere except OpenAI API for responses
+- **Uploaded CSVs**: Processed locally, not stored permanently
+
+### Deployment
+
+For production deployment with proper security:
+- 📖 **See [DEPLOYMENT.md](DEPLOYMENT.md)** for complete guide
+- Includes: Docker, VPS, Streamlit Cloud, HTTPS, password protection
+- Security checklist and best practices
+- Never expose API keys in deployed applications!
 
 ## ⚠️ Important Notes
 
@@ -325,15 +463,20 @@ Use responsibly and in compliance with WhatsApp's Terms of Service.
 
 ```
 wtsp_retarget/
-├── whatsapp_bot.py          # Main bot class (NEW)
-├── test_bot.py              # Example usage script (NEW)
-├── whatsapp_retarget_with_ai.py  # Old version (legacy)
-├── test_with_ai.py          # Old test script (legacy)
+├── streamlit_app.py         # Web UI application
+├── whatsapp_bot.py          # Main bot class
+├── clean_order_csv.py       # E-commerce CSV cleaner
+├── test_phone_cleaning.py   # Tests for cleaning functions
+├── test_bot.py              # Example usage script
+├── contacts_template.csv    # Sample CSV template
+├── README.md                # Main documentation (this file)
+├── CSV_CLEANING_GUIDE.md    # CSV cleaning documentation
+├── DEPLOYMENT.md            # Production deployment guide (NEW)
 ├── requirements.txt         # Python dependencies
 ├── .env                     # API keys (create from .env.example)
 ├── .env.example            # Template for .env
 ├── whatsapp_profile/       # Browser session (auto-created)
-└── README.md               # This file
+└── temp_media/             # Temporary media uploads (auto-created)
 ```
 
 ### How It Works
