@@ -751,16 +751,48 @@ Keep responses concise and helpful."""
             # Open chat
             url = f"https://web.whatsapp.com/send?phone={phone.replace('+', '')}"
             self.driver.get(url)
-            time.sleep(4)  # Increased wait time for chat to load
+            time.sleep(5)  # Increased wait time for chat to load
 
-            # Check if chat loaded successfully
-            try:
-                WebDriverWait(self.driver, 10).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "[data-testid='conversation-panel-body']"))
-                )
-            except TimeoutException:
-                print(f"⚠️  Could not load chat for {phone}")
+            # Check if chat loaded successfully - try multiple selectors
+            chat_loaded = False
+            chat_selectors = [
+                "[data-testid='conversation-panel-body']",
+                "[data-testid='conversation-panel-messages']",
+                "div[class*='_ak'][role='application']",  # Main WhatsApp panel
+                "[contenteditable='true'][data-tab='10']",  # Message input box
+            ]
+
+            print("⏳ Waiting for chat to load...")
+            for selector in chat_selectors:
+                try:
+                    element = WebDriverWait(self.driver, 5).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                    )
+                    if element:
+                        print(f"✅ Chat loaded (found: {selector})")
+                        chat_loaded = True
+                        break
+                except TimeoutException:
+                    continue
+
+            if not chat_loaded:
+                # Last resort: check with JavaScript
+                print("🔄 Trying JavaScript check...")
+                chat_loaded = self.driver.execute_script("""
+                    // Check if we're in a chat conversation
+                    const hasMessages = document.querySelector('[data-testid="msg-container"]') !== null;
+                    const hasInputBox = document.querySelector('[contenteditable="true"][data-tab="10"]') !== null;
+                    const hasConversation = document.querySelector('[role="application"]') !== null;
+                    return hasMessages || hasInputBox || hasConversation;
+                """)
+
+            if not chat_loaded:
+                print(f"⚠️  Could not load chat for {phone} - chat interface not detected")
+                print("💡 Tip: Make sure the chat exists and WhatsApp Web is properly loaded")
                 return None
+
+            # Give extra time for messages to fully render
+            time.sleep(2)
 
             # Try multiple strategies to find incoming messages
             last_msg = None
