@@ -59,11 +59,34 @@ phone,name,custom_message
 
 Download the `contacts_template.csv` file or use the download button in the UI.
 
+### 🧹 E-commerce CSV Cleaning (NEW!)
+
+Have messy order data from your store? The app now auto-cleans e-commerce CSVs!
+
+**Handles:**
+- ✅ Arabic numerals in phone numbers (٠٥٠٧٨٨٩٣٨٧ → +966507889387)
+- ✅ Various phone formats (spaces, dashes, country codes)
+- ✅ Mixed Arabic and English names
+- ✅ Automatic validation and removal of invalid numbers
+
+**How to use:**
+1. In the Streamlit app, select **"E-commerce Orders (auto-clean)"**
+2. Upload your order CSV (expected format: OrderDate, empty, name, phone, address, ...)
+3. The app automatically cleans and validates all data
+4. Send bulk messages to your customers!
+
+**Command-line option:**
+```bash
+python clean_order_csv.py "your_orders.csv"
+```
+
+See the [CSV Cleaning Guide](CSV_CLEANING_GUIDE.md) for detailed documentation.
+
 ### UI Screenshots
 
 The Streamlit UI includes:
 1. **Sidebar Configuration**: Set API keys, country codes, delays, and login status
-2. **Bulk Messaging Tab**: Upload CSV, compose messages, attach media, and send
+2. **Bulk Messaging Tab**: Upload CSV (standard or e-commerce), compose messages, attach media, and send
 3. **AI Auto-Responder Tab**: Select contacts to monitor and view live conversations
 4. **Analytics Tab**: View detailed statistics and success rates
 5. **Help Tab**: Complete documentation within the app
@@ -384,8 +407,11 @@ Use responsibly and in compliance with WhatsApp's Terms of Service.
 wtsp_retarget/
 ├── streamlit_app.py         # Web UI application (NEW)
 ├── whatsapp_bot.py          # Main bot class
+├── clean_order_csv.py       # E-commerce CSV cleaner (NEW)
+├── test_phone_cleaning.py   # Tests for cleaning functions (NEW)
 ├── test_bot.py              # Example usage script
 ├── contacts_template.csv    # Sample CSV template (NEW)
+├── CSV_CLEANING_GUIDE.md    # CSV cleaning documentation (NEW)
 ├── requirements.txt         # Python dependencies
 ├── .env                     # API keys (create from .env.example)
 ├── .env.example            # Template for .env

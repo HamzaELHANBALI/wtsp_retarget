@@ -7,6 +7,7 @@ from pathlib import Path
 from datetime import datetime
 import threading
 from whatsapp_bot import WhatsAppBot
+from clean_order_csv import clean_phone_number, clean_name, convert_arabic_numerals
 
 # Page configuration
 st.set_page_config(
@@ -78,34 +79,13 @@ def validate_phone_number(phone):
     """Validate phone number format"""
     if pd.isna(phone):
         return False
-    phone_str = str(phone).strip()
-    # Remove common separators
-    phone_str = re.sub(r'[\s\-\(\)]', '', phone_str)
-    # Check if it's a valid format (with or without + and country code)
-    if re.match(r'^\+?\d{10,15}$', phone_str):
-        return True
-    return False
+    # Use the advanced cleaning function - if it returns a valid number, it's valid
+    cleaned = clean_phone_number(phone)
+    return cleaned is not None
 
 def format_phone_number(phone, country_code="+966"):
-    """Format phone number with country code"""
-    phone_str = str(phone).strip()
-    # Remove common separators
-    phone_str = re.sub(r'[\s\-\(\)]', '', phone_str)
-
-    # If it already has +, return as is
-    if phone_str.startswith('+'):
-        return phone_str
-
-    # If it starts with country code without +, add +
-    if phone_str.startswith(country_code.replace('+', '')):
-        return '+' + phone_str
-
-    # If it starts with 0, remove it and add country code
-    if phone_str.startswith('0'):
-        phone_str = phone_str[1:]
-
-    # Add country code
-    return country_code + phone_str
+    """Format phone number with country code using advanced cleaning"""
+    return clean_phone_number(phone, country_code)
 
 def parse_message_template(template, name="", phone="", custom_message=""):
     """Replace variables in message template"""
@@ -225,64 +205,117 @@ with tab1:
         with col1:
             st.subheader("📋 Upload Contacts")
 
+            # CSV format selection
+            csv_format = st.radio(
+                "Select CSV Format:",
+                options=["Standard Format (phone, name, custom_message)", "E-commerce Orders (auto-clean)"],
+                help="Standard: phone, name, custom_message\nE-commerce: OrderDate, name, phone, address (auto-cleans Arabic numerals)"
+            )
+
             # CSV Upload
             uploaded_file = st.file_uploader(
                 "Upload CSV file",
                 type=['csv'],
-                help="Upload a CSV file with columns: phone, name, custom_message (optional)"
+                help="Upload a CSV file - format will be auto-detected based on your selection above"
             )
 
             if uploaded_file is not None:
                 try:
-                    df = pd.read_csv(uploaded_file)
+                    df = pd.read_csv(uploaded_file, encoding='utf-8-sig')
 
-                    # Validate required columns
-                    required_cols = ['phone']
-                    missing_cols = [col for col in required_cols if col not in df.columns]
+                    # Handle E-commerce order format
+                    if "E-commerce Orders" in csv_format:
+                        st.info("🔄 Auto-cleaning e-commerce order data...")
 
-                    if missing_cols:
-                        st.error(f"❌ Missing required columns: {', '.join(missing_cols)}")
-                    else:
-                        # Add name column if missing
-                        if 'name' not in df.columns:
-                            df['name'] = 'Customer'
+                        # Detect columns by position for e-commerce format
+                        # Expected: OrderDate, (empty), name, phone, address, ...
+                        col_names = list(df.columns)
 
-                        # Add custom_message column if missing
-                        if 'custom_message' not in df.columns:
-                            df['custom_message'] = ''
+                        if len(col_names) >= 5:
+                            # Map columns by position
+                            order_date_col = col_names[0]
+                            name_col = col_names[2]
+                            phone_col = col_names[3]
+                            address_col = col_names[4]
 
-                        # Validate and format phone numbers
-                        df['phone_valid'] = df['phone'].apply(validate_phone_number)
-                        df['phone_formatted'] = df.apply(
-                            lambda row: format_phone_number(row['phone'], country_code) if row['phone_valid'] else row['phone'],
-                            axis=1
-                        )
+                            # Create standardized DataFrame
+                            cleaned_df = pd.DataFrame()
+                            cleaned_df['name'] = df[name_col].apply(clean_name)
+                            cleaned_df['phone'] = df[phone_col].apply(lambda x: clean_phone_number(x, country_code))
+                            cleaned_df['address'] = df[address_col].fillna('')
+                            cleaned_df['custom_message'] = ''
 
-                        st.session_state.contacts_df = df
+                            # Filter out invalid phones
+                            initial_count = len(cleaned_df)
+                            cleaned_df = cleaned_df[cleaned_df['phone'].notna()]
 
-                        # Show preview
-                        st.success(f"✅ Loaded {len(df)} contacts")
+                            st.success(f"✅ Cleaned {initial_count} records → {len(cleaned_df)} valid contacts")
+                            st.info(f"📍 Removed {initial_count - len(cleaned_df)} records with invalid phone numbers")
 
-                        valid_count = df['phone_valid'].sum()
-                        invalid_count = len(df) - valid_count
+                            df = cleaned_df
+                        else:
+                            st.error("❌ E-commerce CSV format not recognized. Expected at least 5 columns.")
+                            df = None
 
-                        col_a, col_b = st.columns(2)
-                        with col_a:
-                            st.metric("Valid Numbers", valid_count)
-                        with col_b:
-                            st.metric("Invalid Numbers", invalid_count)
+                    # Validate required columns for standard format
+                    if df is not None:
+                        required_cols = ['phone']
+                        missing_cols = [col for col in required_cols if col not in df.columns]
 
-                        if invalid_count > 0:
-                            st.warning("⚠️ Some phone numbers are invalid and will be skipped")
+                        if missing_cols:
+                            st.error(f"❌ Missing required columns: {', '.join(missing_cols)}")
+                        else:
+                            # Add name column if missing
+                            if 'name' not in df.columns:
+                                df['name'] = 'Customer'
 
-                        # Preview table
-                        st.dataframe(
-                            df[['phone', 'phone_formatted', 'name', 'phone_valid']].head(10),
-                            use_container_width=True
-                        )
+                            # Add custom_message column if missing
+                            if 'custom_message' not in df.columns:
+                                df['custom_message'] = ''
+
+                            # For standard format, validate and format phone numbers
+                            if "Standard Format" in csv_format:
+                                df['phone_valid'] = df['phone'].apply(validate_phone_number)
+                                df['phone_formatted'] = df.apply(
+                                    lambda row: format_phone_number(row['phone'], country_code) if row['phone_valid'] else row['phone'],
+                                    axis=1
+                                )
+                            else:
+                                # E-commerce format already cleaned
+                                df['phone_valid'] = df['phone'].notna()
+                                df['phone_formatted'] = df['phone']
+
+                            st.session_state.contacts_df = df
+
+                            # Show preview
+                            st.success(f"✅ Loaded {len(df)} contacts")
+
+                            valid_count = df['phone_valid'].sum()
+                            invalid_count = len(df) - valid_count
+
+                            col_a, col_b = st.columns(2)
+                            with col_a:
+                                st.metric("Valid Numbers", valid_count)
+                            with col_b:
+                                st.metric("Invalid Numbers", invalid_count)
+
+                            if invalid_count > 0:
+                                st.warning("⚠️ Some phone numbers are invalid and will be skipped")
+
+                            # Preview table
+                            display_cols = ['name', 'phone_formatted', 'phone_valid']
+                            if 'address' in df.columns:
+                                display_cols.insert(2, 'address')
+
+                            st.dataframe(
+                                df[display_cols].head(10),
+                                use_container_width=True
+                            )
 
                 except Exception as e:
                     st.error(f"❌ Error reading CSV: {str(e)}")
+                    import traceback
+                    st.code(traceback.format_exc())
 
             # Download sample template
             st.divider()
