@@ -435,51 +435,94 @@ Keep responses concise and helpful."""
             if is_video:
                 print("🎥 Selecting 'Photos & Videos' option...")
 
-                # Method 1: Click the media icon directly (data-icon='media-filled-refreshed')
-                photos_clicked = False
-                try:
-                    media_btn = self.driver.find_element(By.CSS_SELECTOR, "[data-icon='media-filled-refreshed']")
-                    if media_btn and media_btn.is_displayed():
-                        media_btn.click()
-                        print("✅ Clicked 'Photos & Videos' (media-filled-refreshed)")
-                        photos_clicked = True
-                        time.sleep(1)
-                except:
-                    pass
+                # Give menu time to fully render
+                time.sleep(1)
 
-                # Method 2: JavaScript fallback
+                # Method 1: Try multiple icon selectors
+                photos_clicked = False
+                icon_selectors = [
+                    "[data-icon='media-filled-refreshed']",
+                    "[data-icon='image']",
+                    "[data-icon='gallery']",
+                    "span[data-icon='image']",
+                    "span[data-icon='gallery']",
+                ]
+
+                for selector in icon_selectors:
+                    try:
+                        media_btn = self.driver.find_element(By.CSS_SELECTOR, selector)
+                        if media_btn and media_btn.is_displayed():
+                            media_btn.click()
+                            print(f"✅ Clicked 'Photos & Videos' ({selector})")
+                            photos_clicked = True
+                            time.sleep(1.5)
+                            break
+                    except:
+                        continue
+
+                # Method 2: JavaScript with more comprehensive search
                 if not photos_clicked:
                     photos_clicked = self.driver.execute_script("""
-                        // Look for the media icon
-                        const mediaBtn = document.querySelector('[data-icon="media-filled-refreshed"]');
-                        if (mediaBtn && mediaBtn.offsetParent !== null) {
-                            mediaBtn.click();
-                            return true;
+                        // Try icon selectors
+                        const iconSelectors = [
+                            '[data-icon="media-filled-refreshed"]',
+                            '[data-icon="image"]',
+                            '[data-icon="gallery"]',
+                            'span[data-icon="image"]',
+                            'span[data-icon="gallery"]'
+                        ];
+
+                        for (const sel of iconSelectors) {
+                            const icon = document.querySelector(sel);
+                            if (icon && icon.offsetParent !== null) {
+                                // Find clickable parent
+                                let clickable = icon;
+                                while (clickable && !clickable.onclick && clickable.tagName !== 'BUTTON' && !clickable.getAttribute('role')) {
+                                    clickable = clickable.parentElement;
+                                }
+                                if (clickable) {
+                                    clickable.click();
+                                    return true;
+                                }
+                            }
                         }
 
                         // Fallback: Look for menu items with photo/video text
-                        const items = Array.from(document.querySelectorAll('li, div[role="button"], span[role="button"]'));
+                        const items = Array.from(document.querySelectorAll('li, div[role="button"], span[role="button"], button'));
                         for (const item of items) {
                             const text = (item.textContent || '').toLowerCase();
                             const label = (item.getAttribute('aria-label') || '').toLowerCase();
+                            const title = (item.getAttribute('title') || '').toLowerCase();
 
                             if ((text.includes('photo') && text.includes('video')) ||
                                 (label.includes('photo') && label.includes('video')) ||
+                                (title.includes('photo') && title.includes('video')) ||
                                 text.includes('photos & videos') ||
-                                label.includes('photos & videos')) {
+                                label.includes('photos & videos') ||
+                                text.includes('images') ||
+                                label.includes('images')) {
                                 item.click();
                                 return true;
                             }
                         }
+
+                        // Last resort: click first menu item (usually Photos & Videos)
+                        const firstItem = document.querySelector('ul li:first-child, div[role="button"]:first-of-type');
+                        if (firstItem) {
+                            firstItem.click();
+                            return true;
+                        }
+
                         return false;
                     """)
 
                     if photos_clicked:
                         print("✅ Clicked 'Photos & Videos' (via JavaScript)")
-                        time.sleep(1)
+                        time.sleep(1.5)
 
                 if not photos_clicked:
                     print("⚠️  Could not find 'Photos & Videos' button, trying direct file input")
+                    print("💡  This may cause video upload to fail")
 
             # Find file input - IMPORTANT: Wait longer for Finder to open and file input to be ready
             print("📂 Looking for file input...")
@@ -487,13 +530,22 @@ Keep responses concise and helpful."""
 
             # Try to find the file input (it appears after clicking attach or Photos & Videos)
             # For videos, we want the file input that accepts video files
-            file_input_selectors = [
-                "input[type='file'][accept*='video']",  # Video input first
-                "input[type='file'][accept*='image']",  # Then image input
-                "input[type='file']"  # Finally any file input
-            ]
+            if is_video:
+                # For videos, be more strict - only use video or general file inputs
+                file_input_selectors = [
+                    "input[type='file'][accept*='video']",  # Video input preferred
+                    "input[type='file']:not([accept*='image'])",  # General file input (not image-only)
+                    "input[type='file']"  # Last resort: any file input
+                ]
+            else:
+                # For images, image or general inputs are fine
+                file_input_selectors = [
+                    "input[type='file'][accept*='image']",
+                    "input[type='file']"
+                ]
 
             file_input = None
+            found_selector = None
             for selector in file_input_selectors:
                 try:
                     inputs = self.driver.find_elements(By.CSS_SELECTOR, selector)
@@ -503,8 +555,19 @@ Keep responses concise and helpful."""
                             try:
                                 # Check if input is attached to DOM and not hidden
                                 if inp.is_enabled():
+                                    # Check accept attribute
+                                    accept_attr = inp.get_attribute('accept') or ''
+
+                                    # For videos, skip if it ONLY accepts images
+                                    if is_video and accept_attr and 'video' not in accept_attr and 'image' in accept_attr:
+                                        print(f"   Skipping image-only input: {accept_attr}")
+                                        continue
+
                                     file_input = inp
+                                    found_selector = selector
                                     print(f"✅ Found file input: {selector}")
+                                    if accept_attr:
+                                        print(f"   Accepts: {accept_attr}")
                                     break
                             except:
                                 continue
@@ -519,7 +582,12 @@ Keep responses concise and helpful."""
                     file_input = self.wait.until(
                         EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='file']"))
                     )
-                    print("✅ Found file input (fallback)")
+                    accept_attr = file_input.get_attribute('accept') or 'any'
+                    print(f"✅ Found file input (fallback) - Accepts: {accept_attr}")
+
+                    # Warn if video but input only accepts images
+                    if is_video and 'video' not in accept_attr and 'image' in accept_attr:
+                        print("⚠️  WARNING: Video file but input only accepts images - upload may fail!")
                 except:
                     raise Exception("Could not find file input element")
 
