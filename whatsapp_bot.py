@@ -962,7 +962,7 @@ Keep responses concise and helpful."""
 
             # Strategy 1: Use JavaScript to find incoming messages with timestamps/IDs
             # This is MORE ROBUST - tracks messages by their unique attributes
-            result = self.driver.execute_script("""
+            result = self.driver.execute_script(r"""
                 console.log('Starting message detection...');
 
                 // Try multiple selectors for message containers
@@ -1144,17 +1144,22 @@ Keep responses concise and helpful."""
         Returns:
             AI-generated response
         """
-        print(f"\n🤖 Generating AI response for message from {phone}...")
-        print(f"   Customer: {message[:100]}..." if len(message) > 100 else f"   Customer: {message}")
+        import sys
+        print(f"\n🤖 Generating AI response for message from {phone}...", flush=True)
+        sys.stdout.flush()  # Force immediate output
+        print(f"   Customer: {message[:100]}..." if len(message) > 100 else f"   Customer: {message}", flush=True)
+        sys.stdout.flush()
 
         if not self.ai_enabled:
-            print("⚠️  AI not enabled - using default response")
+            print("⚠️  AI not enabled - using default response", flush=True)
+            sys.stdout.flush()
             return "Thank you for your message. We'll get back to you soon."
 
         try:
             # Get conversation history
             history = self.conversations.get(phone, [])
-            print(f"   Using {len(history)} previous messages as context")
+            print(f"   Using {len(history)} previous messages as context", flush=True)
+            sys.stdout.flush()
 
             # Build messages for API
             messages = [
@@ -1167,17 +1172,24 @@ Keep responses concise and helpful."""
             # Add current message
             messages.append({"role": "user", "content": message})
 
-            print(f"   Calling OpenAI {self.model}...")
-            # Call OpenAI API
+            print(f"   Calling OpenAI {self.model}...", flush=True)
+            sys.stdout.flush()
+
+            # Call OpenAI API with explicit timeout
             response = self.openai_client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 temperature=0.7,
-                max_tokens=200
+                max_tokens=200,
+                timeout=30.0  # 30 second timeout
             )
 
+            print(f"   ✅ Received response from OpenAI", flush=True)
+            sys.stdout.flush()
+
             ai_response = response.choices[0].message.content.strip()
-            print(f"✅ AI Response generated: {ai_response[:100]}..." if len(ai_response) > 100 else f"✅ AI Response: {ai_response}")
+            print(f"✅ AI Response generated: {ai_response[:100]}..." if len(ai_response) > 100 else f"✅ AI Response: {ai_response}", flush=True)
+            sys.stdout.flush()
 
             # Update conversation history
             if phone not in self.conversations:
@@ -1190,13 +1202,16 @@ Keep responses concise and helpful."""
             if len(self.conversations[phone]) > 20:
                 self.conversations[phone] = self.conversations[phone][-20:]
 
-            print(f"   Conversation history updated ({len(self.conversations[phone])} messages)")
+            print(f"   Conversation history updated ({len(self.conversations[phone])} messages)", flush=True)
+            sys.stdout.flush()
             return ai_response
 
         except Exception as e:
-            print(f"⚠️  AI response error: {e}")
+            print(f"⚠️  AI response error: {e}", flush=True)
+            sys.stdout.flush()
             import traceback
             traceback.print_exc()
+            sys.stdout.flush()
             return "Thank you for your message. We'll get back to you soon."
 
     def initialize_message_tracking(self, phone: str):
