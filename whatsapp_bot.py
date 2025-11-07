@@ -635,20 +635,64 @@ Keep responses concise and helpful."""
             if not send_success:
                 raise Exception("Could not send media - all methods failed")
 
-            # Wait to verify send
-            time.sleep(3)
+            # Wait for upload to complete and message to appear in chat
+            print("⏳ Waiting for upload to complete and message to appear...")
+            time.sleep(5)  # Videos need more time to upload
 
-            # Check if message was sent (look for checkmarks)
+            # Check if message was sent by looking for the LAST message container
             sent_verified = self.driver.execute_script("""
-                // Look for sent indicators
-                const indicators = document.querySelectorAll('[data-icon="msg-check"], [data-icon="msg-dblcheck"]');
-                return indicators.length > 0;
+                // Get all message containers
+                const messages = document.querySelectorAll('[data-testid="msg-container"]');
+                if (messages.length === 0) {
+                    return false;
+                }
+
+                // Get the last message (most recent)
+                const lastMessage = messages[messages.length - 1];
+
+                // Check if it's an outgoing message (has 'message-out' class)
+                const isOutgoing = lastMessage.querySelector('[class*="message-out"]') !== null;
+
+                if (!isOutgoing) {
+                    return false;
+                }
+
+                // Check for checkmarks (pending, sent, or delivered)
+                const hasCheck = lastMessage.querySelector('[data-icon="msg-check"]') !== null;
+                const hasDblCheck = lastMessage.querySelector('[data-icon="msg-dblcheck"]') !== null;
+                const hasClock = lastMessage.querySelector('[data-icon="msg-time"]') !== null;  // Pending
+
+                return hasCheck || hasDblCheck || hasClock;
             """)
 
             if sent_verified:
-                print("✅ Media sent successfully (verified)")
+                print("✅ Media sent successfully (verified - last message has status)")
             else:
-                print("⚠️  Could not verify send, but attempt was made")
+                # Try one more time after additional wait
+                print("⚠️  First verification failed, waiting longer for upload...")
+                time.sleep(5)
+
+                sent_verified_retry = self.driver.execute_script("""
+                    const messages = document.querySelectorAll('[data-testid="msg-container"]');
+                    if (messages.length === 0) return false;
+
+                    const lastMessage = messages[messages.length - 1];
+                    const isOutgoing = lastMessage.querySelector('[class*="message-out"]') !== null;
+                    if (!isOutgoing) return false;
+
+                    const hasCheck = lastMessage.querySelector('[data-icon="msg-check"]') !== null;
+                    const hasDblCheck = lastMessage.querySelector('[data-icon="msg-dblcheck"]') !== null;
+                    const hasClock = lastMessage.querySelector('[data-icon="msg-time"]') !== null;
+
+                    return hasCheck || hasDblCheck || hasClock;
+                """)
+
+                if sent_verified_retry:
+                    print("✅ Media sent successfully (verified after retry)")
+                else:
+                    print("⚠️  Could not verify send - message may still be uploading or failed")
+                    # Return False so we know it didn't send
+                    return False
 
             return True
 
