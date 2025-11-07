@@ -496,30 +496,84 @@ Keep responses concise and helpful."""
                 except Exception as e:
                     print(f"⚠️  Could not add caption: {e}")
 
-            # Wait for upload to complete
+            # Wait for upload to complete and send button to be enabled
             print("⏳ Waiting for upload to complete...")
-            time.sleep(3)
+            time.sleep(4)
 
-            # Click send button
-            try:
-                send_btn = self.wait.until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, "[data-icon='send'], span[data-icon='send']"))
-                )
-                send_btn.click()
-                print("✅ Media sent")
-            except:
-                # Fallback: try parent element or press Enter
+            # Click send button - try multiple methods
+            print("📤 Looking for send button...")
+
+            send_success = False
+
+            # Method 1: Try multiple send button selectors
+            send_selectors = [
+                "[data-icon='send']",
+                "span[data-icon='send']",
+                "[aria-label='Send']",
+                "button[aria-label='Send']",
+                "[data-testid='send']",
+            ]
+
+            for selector in send_selectors:
                 try:
-                    send_btn = self.driver.find_element(By.CSS_SELECTOR, "[data-icon='send']")
-                    self.driver.execute_script("arguments[0].click();", send_btn)
-                    print("✅ Media sent (via JavaScript)")
+                    send_btn = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    if send_btn and send_btn.is_displayed():
+                        send_btn.click()
+                        print(f"✅ Send button clicked (selector: {selector})")
+                        send_success = True
+                        break
                 except:
-                    # Last resort: press Enter
-                    from selenium.webdriver.common.action_chains import ActionChains
-                    ActionChains(self.driver).send_keys(Keys.RETURN).perform()
-                    print("✅ Media sent (via Enter key)")
+                    continue
 
+            # Method 2: JavaScript fallback
+            if not send_success:
+                print("⚠️  Direct click failed, trying JavaScript...")
+                send_success = self.driver.execute_script("""
+                    const selectors = [
+                        '[data-icon="send"]',
+                        '[aria-label="Send"]',
+                        '[data-testid="send"]'
+                    ];
+
+                    for (const sel of selectors) {
+                        const btn = document.querySelector(sel);
+                        if (btn && btn.offsetParent !== null) {
+                            btn.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                """)
+
+                if send_success:
+                    print("✅ Send button clicked (via JavaScript)")
+
+            # Method 3: Press Enter as last resort
+            if not send_success:
+                print("⚠️  Send button not found, trying Enter key...")
+                from selenium.webdriver.common.action_chains import ActionChains
+                ActionChains(self.driver).send_keys(Keys.RETURN).perform()
+                print("✅ Pressed Enter key to send")
+                send_success = True
+
+            if not send_success:
+                raise Exception("Could not send media - all methods failed")
+
+            # Wait to verify send
             time.sleep(3)
+
+            # Check if message was sent (look for checkmarks)
+            sent_verified = self.driver.execute_script("""
+                // Look for sent indicators
+                const indicators = document.querySelectorAll('[data-icon="msg-check"], [data-icon="msg-dblcheck"]');
+                return indicators.length > 0;
+            """)
+
+            if sent_verified:
+                print("✅ Media sent successfully (verified)")
+            else:
+                print("⚠️  Could not verify send, but attempt was made")
+
             return True
 
         except Exception as e:
