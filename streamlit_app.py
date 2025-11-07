@@ -102,13 +102,27 @@ st.markdown('<div class="sub-header">Send bulk messages and automate customer se
 with st.sidebar:
     st.header("⚙️ Configuration")
 
-    # API Key
-    openai_api_key = st.text_input(
-        "OpenAI API Key",
-        type="password",
-        help="Enter your OpenAI API key for AI responses",
-        value=os.getenv("OPENAI_API_KEY", "")
-    )
+    # API Key - prioritize environment variable for security
+    env_api_key = os.getenv("OPENAI_API_KEY", "")
+
+    if env_api_key:
+        # API key is set in environment - don't show input
+        openai_api_key = env_api_key
+        st.success("✅ OpenAI API Key loaded from environment")
+        with st.expander("🔐 API Key Security"):
+            st.info("API key is securely loaded from .env file")
+            st.caption(f"Key starts with: {env_api_key[:7]}...")
+    else:
+        # No environment variable - show input (for local testing only)
+        st.warning("⚠️ No API key found in .env file")
+        openai_api_key = st.text_input(
+            "OpenAI API Key (Local Testing Only)",
+            type="password",
+            help="⚠️ For deployment, use .env file instead!",
+            placeholder="sk-..."
+        )
+        if openai_api_key:
+            st.caption("⚠️ For production/deployment, add OPENAI_API_KEY to .env file")
 
     # Country Code
     country_code = st.selectbox(
