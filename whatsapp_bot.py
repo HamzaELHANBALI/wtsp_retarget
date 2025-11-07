@@ -264,13 +264,6 @@ Keep responses concise and helpful."""
             conversation_summary: Brief summary of the conversation
         """
         try:
-            # Check if lead already exists
-            existing_leads = self.get_leads()
-            for lead in existing_leads:
-                if lead['phone'] == phone:
-                    print(f"⚠️  Lead already exists for {phone} - skipping duplicate")
-                    return
-
             # Lookup customer data from contacts_df
             name = "Customer"
             city = ""
