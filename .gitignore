@@ -47,6 +47,8 @@ Thumbs.db
 *.log
 
 # CSV files (if they contain sensitive data)
-# Uncomment if needed:
-# *.csv
+confirmed_leads.csv
+confirmation_leads.csv
+*_leads.csv
+*confirmation*.csv
 
