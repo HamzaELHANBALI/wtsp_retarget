@@ -4,5 +4,8 @@ webdriver-manager==4.0.2
 openai==1.54.5
 python-dotenv==1.0.1
 
-# Optional: For CSV contacts
+# CSV and data handling
 pandas==2.2.3
+
+# Streamlit UI
+streamlit==1.31.0

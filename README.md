@@ -10,8 +10,65 @@ A modern, reliable WhatsApp automation tool for bulk messaging and AI-powered cu
 - **🔐 Persistent Sessions**: Scan QR code once, session saved for future runs
 - **🌍 Multi-Language**: Supports Arabic and English (and other languages)
 - **📊 Statistics**: Track messages sent, AI responses, and conversations
+- **🎨 Streamlit UI**: Beautiful web interface for easy CSV uploads and management
 
-## 🚀 Quick Start
+## 🌟 NEW: Streamlit Web UI
+
+We now have a beautiful, user-friendly web interface! Perfect for non-technical users.
+
+### Quick Launch
+
+```bash
+# Install dependencies (if not already done)
+pip install -r requirements.txt
+
+# Launch the web UI
+streamlit run streamlit_app.py
+```
+
+The app will open in your browser at `http://localhost:8501`
+
+### UI Features
+
+- **📤 CSV Upload**: Drag and drop your contacts CSV file
+- **✏️ Message Composer**: Write messages with variables (`{name}`, `{phone}`, `{custom_message}`)
+- **📎 Media Attachments**: Upload images and videos directly through the UI
+- **📊 Real-time Progress**: See messages being sent with live progress bars
+- **🤖 AI Monitoring Dashboard**: Track and view AI auto-responses in real-time
+- **⚙️ Easy Configuration**: Set API keys, delays, and system prompts without code
+- **📈 Analytics**: View statistics and success rates
+- **📥 Template Download**: Get a sample CSV template with one click
+
+### CSV Format for UI
+
+Your CSV should have these columns:
+
+| Column | Required | Description |
+|--------|----------|-------------|
+| `phone` | ✅ Yes | Phone number (with or without country code) |
+| `name` | ❌ Optional | Contact name (defaults to "Customer") |
+| `custom_message` | ❌ Optional | Custom message per contact |
+
+**Example CSV:**
+```csv
+phone,name,custom_message
++966501234567,Ahmed,Special 20% discount just for you!
+0502345678,Fatima,Thank you for being a loyal customer
+966503456789,Mohammed,
+```
+
+Download the `contacts_template.csv` file or use the download button in the UI.
+
+### UI Screenshots
+
+The Streamlit UI includes:
+1. **Sidebar Configuration**: Set API keys, country codes, delays, and login status
+2. **Bulk Messaging Tab**: Upload CSV, compose messages, attach media, and send
+3. **AI Auto-Responder Tab**: Select contacts to monitor and view live conversations
+4. **Analytics Tab**: View detailed statistics and success rates
+5. **Help Tab**: Complete documentation within the app
+
+## 🚀 Quick Start (Command Line)
 
 ### 1. Installation
 
@@ -325,14 +382,15 @@ Use responsibly and in compliance with WhatsApp's Terms of Service.
 
 ```
 wtsp_retarget/
-├── whatsapp_bot.py          # Main bot class (NEW)
-├── test_bot.py              # Example usage script (NEW)
-├── whatsapp_retarget_with_ai.py  # Old version (legacy)
-├── test_with_ai.py          # Old test script (legacy)
+├── streamlit_app.py         # Web UI application (NEW)
+├── whatsapp_bot.py          # Main bot class
+├── test_bot.py              # Example usage script
+├── contacts_template.csv    # Sample CSV template (NEW)
 ├── requirements.txt         # Python dependencies
 ├── .env                     # API keys (create from .env.example)
 ├── .env.example            # Template for .env
 ├── whatsapp_profile/       # Browser session (auto-created)
+├── temp_media/             # Temporary media uploads (auto-created)
 └── README.md               # This file
 ```
 

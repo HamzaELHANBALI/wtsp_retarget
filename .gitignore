@@ -17,6 +17,10 @@ __pycache__/
 
 # Chrome profile directory (contains browser session data)
 whatsapp_chrome_profile/
+whatsapp_profile/
+
+# Temporary media uploads from Streamlit
+temp_media/
 
 # Useless/redundant files
 whatsapp_retarget_saudi.py
