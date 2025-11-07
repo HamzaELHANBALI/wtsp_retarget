@@ -97,30 +97,38 @@ def check_and_respond_to_messages():
     responses = []
     for phone in st.session_state.monitored_contacts:
         try:
+            # Check for new messages
             new_msg = st.session_state.bot.get_new_messages(phone)
+
             if new_msg:
                 # Generate AI response
                 ai_response = st.session_state.bot.generate_ai_response(new_msg, phone)
+
                 # Send response
-                if st.session_state.bot.send_message(phone, ai_response):
-                    responses.append({
-                        'phone': phone,
-                        'customer_msg': new_msg,
-                        'ai_response': ai_response,
-                        'success': True
-                    })
-                else:
-                    responses.append({
-                        'phone': phone,
-                        'customer_msg': new_msg,
-                        'ai_response': ai_response,
-                        'success': False
-                    })
+                send_success = st.session_state.bot.send_message(phone, ai_response)
+
+                responses.append({
+                    'phone': phone,
+                    'customer_msg': new_msg,
+                    'ai_response': ai_response,
+                    'success': send_success,
+                    'checked': True
+                })
+            else:
+                # No new message found - still track that we checked
+                responses.append({
+                    'phone': phone,
+                    'checked': True,
+                    'no_new_message': True,
+                    'success': False
+                })
+
         except Exception as e:
             responses.append({
                 'phone': phone,
                 'error': str(e),
-                'success': False
+                'success': False,
+                'checked': True
             })
     return responses
 
@@ -778,19 +786,33 @@ with tab2:
                         responses = check_and_respond_to_messages()
 
                         if responses:
-                            st.success(f"✅ Checked all contacts. Found {len([r for r in responses if r['success']])} new messages!")
+                            # Count actual new messages
+                            new_messages_count = len([r for r in responses if r.get('success') and r.get('customer_msg')])
+                            checked_count = len([r for r in responses if r.get('checked')])
+
+                            if new_messages_count > 0:
+                                st.success(f"✅ Checked {checked_count} contacts. Found {new_messages_count} new messages!")
+                            else:
+                                st.info(f"ℹ️ Checked {checked_count} contacts. No new messages found.")
 
                             # Display responses
                             for resp in responses:
-                                if resp['success']:
+                                if resp.get('success') and resp.get('customer_msg'):
+                                    # Successfully responded to a new message
                                     with st.expander(f"✅ Responded to {resp['phone']}", expanded=True):
                                         st.markdown(f"**Customer:** {resp['customer_msg']}")
                                         st.markdown(f"**AI Response:** {resp['ai_response']}")
-                                else:
+                                elif resp.get('no_new_message'):
+                                    # Checked but no new message
+                                    with st.expander(f"ℹ️ {resp['phone']} - No new messages"):
+                                        st.info("Contact was checked but no new messages were found.")
+                                        st.caption("💡 Make sure you reply to the bot's message in WhatsApp first!")
+                                elif resp.get('error'):
+                                    # Error occurred
                                     with st.expander(f"❌ Error with {resp['phone']}"):
                                         st.error(f"Error: {resp.get('error', 'Unknown error')}")
                         else:
-                            st.info("ℹ️ No new messages from monitored contacts.")
+                            st.info("ℹ️ No contacts to check.")
 
             st.caption("💡 Click the button above to manually check for messages and send AI responses.")
 
@@ -831,18 +853,26 @@ with tab2:
                     responses = check_and_respond_to_messages()
 
                     if responses:
-                        st.success(f"✅ Found {len([r for r in responses if r['success']])} new messages!")
+                        # Count actual new messages
+                        new_messages_count = len([r for r in responses if r.get('success') and r.get('customer_msg')])
+                        checked_count = len([r for r in responses if r.get('checked')])
+
+                        if new_messages_count > 0:
+                            st.success(f"✅ Found {new_messages_count} new messages!")
+                        else:
+                            st.info(f"ℹ️ Checked {checked_count} contacts. No new messages yet.")
+
                         # Display responses
                         for resp in responses:
-                            if resp['success']:
+                            if resp.get('success') and resp.get('customer_msg'):
                                 with st.expander(f"✅ Responded to {resp['phone']}", expanded=True):
                                     st.markdown(f"**Customer:** {resp['customer_msg']}")
                                     st.markdown(f"**AI Response:** {resp['ai_response']}")
-                            else:
+                            elif resp.get('error'):
                                 with st.expander(f"❌ Error with {resp['phone']}"):
                                     st.error(f"Error: {resp.get('error', 'Unknown error')}")
                     else:
-                        st.info("ℹ️ No new messages yet.")
+                        st.info("ℹ️ No contacts to check.")
 
                 # Display conversation history
                 st.markdown("#### Recent Conversations")

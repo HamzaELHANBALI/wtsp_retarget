@@ -670,19 +670,32 @@ Keep responses concise and helpful."""
         """
         try:
             phone = self._format_phone(phone)
+            print(f"🔍 Checking messages from {phone}...")
 
             # Open chat
             url = f"https://web.whatsapp.com/send?phone={phone.replace('+', '')}"
             self.driver.get(url)
-            time.sleep(3)
+            time.sleep(4)  # Increased wait time for chat to load
+
+            # Check if chat loaded successfully
+            try:
+                WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "[data-testid='conversation-panel-body']"))
+                )
+            except TimeoutException:
+                print(f"⚠️  Could not load chat for {phone}")
+                return None
 
             # Try multiple strategies to find incoming messages
             last_msg = None
+            all_incoming = []
 
             # Strategy 1: Use JavaScript to find incoming messages more reliably
-            last_msg = self.driver.execute_script("""
+            result = self.driver.execute_script("""
                 // Find all message bubbles
                 const messageContainers = document.querySelectorAll('[data-testid="msg-container"]');
+
+                console.log('Total message containers:', messageContainers.length);
 
                 // Filter for incoming messages (not sent by us)
                 const incomingMessages = [];
@@ -693,24 +706,62 @@ Keep responses concise and helpful."""
                     const msgDiv = container.querySelector('[class*="message-in"]');
 
                     if (msgDiv) {
-                        // Get the text content
-                        const textElements = container.querySelectorAll('.selectable-text, [data-testid="conversation-text"]');
+                        // Get the text content - try multiple selectors
+                        let text = null;
 
-                        for (const textEl of textElements) {
-                            const text = textEl.textContent || textEl.innerText;
-                            if (text && text.trim()) {
-                                incomingMessages.push(text.trim());
+                        // Try .selectable-text first
+                        const selectableText = container.querySelector('.selectable-text');
+                        if (selectableText) {
+                            text = selectableText.textContent || selectableText.innerText;
+                        }
+
+                        // Try conversation-text as fallback
+                        if (!text) {
+                            const convText = container.querySelector('[data-testid="conversation-text"]');
+                            if (convText) {
+                                text = convText.textContent || convText.innerText;
                             }
+                        }
+
+                        // Try any span with text as last resort
+                        if (!text) {
+                            const spans = container.querySelectorAll('span');
+                            for (const span of spans) {
+                                const spanText = span.textContent || span.innerText;
+                                if (spanText && spanText.trim() && spanText.length > 0) {
+                                    text = spanText;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (text && text.trim()) {
+                            incomingMessages.push(text.trim());
                         }
                     }
                 }
 
-                // Return the last incoming message
-                return incomingMessages.length > 0 ? incomingMessages[incomingMessages.length - 1] : null;
+                console.log('Incoming messages found:', incomingMessages.length);
+
+                // Return all incoming messages and the last one
+                return {
+                    all: incomingMessages,
+                    last: incomingMessages.length > 0 ? incomingMessages[incomingMessages.length - 1] : null,
+                    count: incomingMessages.length
+                };
             """)
+
+            if result:
+                all_incoming = result.get('all', [])
+                last_msg = result.get('last')
+                msg_count = result.get('count', 0)
+                print(f"📨 Found {msg_count} incoming messages from {phone}")
+                if all_incoming:
+                    print(f"💬 Last incoming message: {last_msg[:50]}..." if last_msg and len(last_msg) > 50 else f"💬 Last incoming message: {last_msg}")
 
             # Strategy 2: Fallback using Selenium if JavaScript method fails
             if not last_msg:
+                print("🔄 Trying fallback method...")
                 # Try different selector combinations
                 selector_attempts = [
                     "[data-testid='msg-container'] [class*='message-in'] .selectable-text",
@@ -724,20 +775,28 @@ Keep responses concise and helpful."""
                         messages = self.driver.find_elements(By.CSS_SELECTOR, selector)
                         if messages:
                             last_msg = messages[-1].text.strip()
+                            print(f"✅ Found message with selector: {selector}")
                             if last_msg:
                                 break
-                    except:
+                    except Exception as sel_err:
                         continue
 
             if not last_msg:
+                print(f"ℹ️  No new messages from {phone}")
                 return None
 
             # Check if it's new
             last_seen = self.last_messages.get(phone, "")
 
+            print(f"📝 Last seen message: {last_seen[:50]}..." if last_seen and len(last_seen) > 50 else f"📝 Last seen message: {last_seen}")
+            print(f"📝 Current message: {last_msg[:50]}..." if last_msg and len(last_msg) > 50 else f"📝 Current message: {last_msg}")
+
             if last_msg and last_msg != last_seen:
                 self.last_messages[phone] = last_msg
+                print(f"✨ NEW MESSAGE from {phone}: {last_msg[:100]}...")
                 return last_msg
+            else:
+                print(f"ℹ️  No new messages (already seen)")
 
             return None
 
