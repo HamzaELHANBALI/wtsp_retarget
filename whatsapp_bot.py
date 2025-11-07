@@ -943,14 +943,18 @@ Keep responses concise and helpful."""
                                         document.querySelector('[data-testid="conversation-panel-messages"]');
                     if (msgContainer) {
                         msgContainer.scrollTop = msgContainer.scrollHeight;
+                        console.log('Scrolled to bottom of messages');
+                    } else {
+                        console.log('Could not find message container to scroll');
                     }
                 """)
-                time.sleep(1.5)  # Wait for messages to render after scroll
+                time.sleep(2)  # Increased: Wait for messages to render after scroll
             except Exception as scroll_err:
                 print(f"⚠️  Could not scroll: {scroll_err}")
 
-            # Give extra time for messages to fully render
-            time.sleep(1.5)
+            # Give EXTRA time for messages to fully render (critical for minimized window)
+            print("⏳ Waiting for messages to render...")
+            time.sleep(2.5)  # Increased from 1.5s
 
             # Try multiple strategies to find incoming messages
             last_msg = None
@@ -959,10 +963,17 @@ Keep responses concise and helpful."""
             # Strategy 1: Use JavaScript to find incoming messages with timestamps/IDs
             # This is MORE ROBUST - tracks messages by their unique attributes
             result = self.driver.execute_script("""
-                // Find all message bubbles
-                const messageContainers = document.querySelectorAll('[data-testid="msg-container"]');
+                console.log('Starting message detection...');
 
-                console.log('Total message containers:', messageContainers.length);
+                // Try multiple selectors for message containers
+                let messageContainers = document.querySelectorAll('[data-testid="msg-container"]');
+                console.log('Method 1 - Found containers with [data-testid="msg-container"]:', messageContainers.length);
+
+                // Fallback: try alternative selectors
+                if (messageContainers.length === 0) {
+                    messageContainers = document.querySelectorAll('div[data-id]');
+                    console.log('Method 2 - Found containers with div[data-id]:', messageContainers.length);
+                }
 
                 // Filter for incoming messages (not sent by us)
                 const incomingMessages = [];
@@ -973,6 +984,7 @@ Keep responses concise and helpful."""
                     const msgDiv = container.querySelector('[class*="message-in"]');
 
                     if (msgDiv) {
+                        console.log('Found incoming message element');
                         // Get the text content - try multiple selectors
                         let text = null;
 
@@ -1037,7 +1049,9 @@ Keep responses concise and helpful."""
             if result:
                 messages = result.get('messages', [])
                 msg_count = result.get('count', 0)
-                print(f"📨 Found {msg_count} incoming messages in chat with {phone}")
+                print(f"📨 JavaScript found {msg_count} incoming messages in chat with {phone}")
+                if msg_count == 0:
+                    print("⚠️  JavaScript found 0 messages - will try fallback method")
 
                 # Get seen message IDs for this phone
                 if not hasattr(self, 'seen_message_ids'):
@@ -1130,12 +1144,17 @@ Keep responses concise and helpful."""
         Returns:
             AI-generated response
         """
+        print(f"\n🤖 Generating AI response for message from {phone}...")
+        print(f"   Customer: {message[:100]}..." if len(message) > 100 else f"   Customer: {message}")
+
         if not self.ai_enabled:
+            print("⚠️  AI not enabled - using default response")
             return "Thank you for your message. We'll get back to you soon."
 
         try:
             # Get conversation history
             history = self.conversations.get(phone, [])
+            print(f"   Using {len(history)} previous messages as context")
 
             # Build messages for API
             messages = [
@@ -1148,6 +1167,7 @@ Keep responses concise and helpful."""
             # Add current message
             messages.append({"role": "user", "content": message})
 
+            print(f"   Calling OpenAI {self.model}...")
             # Call OpenAI API
             response = self.openai_client.chat.completions.create(
                 model=self.model,
@@ -1157,6 +1177,7 @@ Keep responses concise and helpful."""
             )
 
             ai_response = response.choices[0].message.content.strip()
+            print(f"✅ AI Response generated: {ai_response[:100]}..." if len(ai_response) > 100 else f"✅ AI Response: {ai_response}")
 
             # Update conversation history
             if phone not in self.conversations:
@@ -1169,10 +1190,13 @@ Keep responses concise and helpful."""
             if len(self.conversations[phone]) > 20:
                 self.conversations[phone] = self.conversations[phone][-20:]
 
+            print(f"   Conversation history updated ({len(self.conversations[phone])} messages)")
             return ai_response
 
         except Exception as e:
             print(f"⚠️  AI response error: {e}")
+            import traceback
+            traceback.print_exc()
             return "Thank you for your message. We'll get back to you soon."
 
     def initialize_message_tracking(self, phone: str):
