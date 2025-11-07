@@ -343,19 +343,33 @@ with tab1:
                 test_media = st.file_uploader(
                     "📎 Attach Media (Optional)",
                     type=['jpg', 'jpeg', 'png', 'gif', 'mp4', 'avi', 'mov'],
-                    help="Upload an image or video to test media sending",
+                    help="Upload an image or video to test media sending (max 500MB)",
                     key="test_media"
                 )
 
                 # Save uploaded test media
                 test_media_path = None
                 if test_media is not None:
-                    temp_dir = Path("temp_media")
-                    temp_dir.mkdir(exist_ok=True)
-                    test_media_path = temp_dir / f"test_{test_media.name}"
-                    with open(test_media_path, "wb") as f:
-                        f.write(test_media.getbuffer())
-                    st.success(f"✅ Media ready: {test_media.name}")
+                    try:
+                        # Get file size in MB
+                        file_size_mb = test_media.size / (1024 * 1024)
+
+                        if file_size_mb > 500:
+                            st.error(f"❌ File too large: {file_size_mb:.1f}MB. Max: 500MB")
+                        else:
+                            temp_dir = Path("temp_media")
+                            temp_dir.mkdir(exist_ok=True)
+                            test_media_path = temp_dir / f"test_{test_media.name}"
+
+                            with st.spinner(f"Uploading {test_media.name} ({file_size_mb:.1f}MB)..."):
+                                with open(test_media_path, "wb") as f:
+                                    f.write(test_media.getbuffer())
+
+                            st.success(f"✅ Media ready: {test_media.name} ({file_size_mb:.1f}MB)")
+                    except Exception as e:
+                        st.error(f"❌ Error uploading media: {str(e)}")
+                        st.info("💡 Try a smaller file or different format")
+                        test_media_path = None
 
                 # Preview
                 st.markdown("**Message Preview:**")
@@ -556,19 +570,33 @@ with tab1:
             media_file = st.file_uploader(
                 "📎 Attach Media (Optional)",
                 type=['jpg', 'jpeg', 'png', 'gif', 'mp4', 'avi', 'mov'],
-                help="Upload an image or video to send with your message"
+                help="Upload an image or video to send with your message (max 500MB)"
             )
 
             # Save uploaded media temporarily
             media_path = None
             if media_file is not None:
-                # Save to temp location
-                temp_dir = Path("temp_media")
-                temp_dir.mkdir(exist_ok=True)
-                media_path = temp_dir / media_file.name
-                with open(media_path, "wb") as f:
-                    f.write(media_file.getbuffer())
-                st.success(f"✅ Media attached: {media_file.name}")
+                try:
+                    # Get file size in MB
+                    file_size_mb = media_file.size / (1024 * 1024)
+
+                    if file_size_mb > 500:
+                        st.error(f"❌ File too large: {file_size_mb:.1f}MB. Max: 500MB")
+                    else:
+                        # Save to temp location
+                        temp_dir = Path("temp_media")
+                        temp_dir.mkdir(exist_ok=True)
+                        media_path = temp_dir / media_file.name
+
+                        with st.spinner(f"Uploading {media_file.name} ({file_size_mb:.1f}MB)..."):
+                            with open(media_path, "wb") as f:
+                                f.write(media_file.getbuffer())
+
+                        st.success(f"✅ Media attached: {media_file.name} ({file_size_mb:.1f}MB)")
+                except Exception as e:
+                    st.error(f"❌ Error uploading media: {str(e)}")
+                    st.info("💡 Try a smaller file or different format")
+                    media_path = None
 
             # Preview message
             with st.expander("👁️ Preview Message"):
