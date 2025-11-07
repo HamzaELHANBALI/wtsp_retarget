@@ -22,7 +22,7 @@ MESSAGE = """🔥 خصم 50% على Tiger Balm ينتهي اليوم! 🔥
 
 # Optional: Media file path
 # Set to None for text-only, or provide path to image/video
-MEDIA_FILE = None  # Example: "/path/to/video.mp4"
+MEDIA_FILE = "/Users/hamzaelhanbali/Desktop/personal/tiger/hamza_tiger_27_octobre_1.mp4"  # Update this path
 
 # AI System Prompt (customize for your business)
 SYSTEM_PROMPT = """You are a helpful customer service representative for a business selling Tiger Balm.
