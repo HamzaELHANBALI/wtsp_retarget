@@ -407,17 +407,15 @@ with st.sidebar:
             - "أيوه" / "تمام" / "ماشي" / "أبغى"
             - "Yes" / "Sure" / "Okay" / "I want it"
             
-            ### Step 3: Confirm City
+            ### Step 3: Ask for City
             **Arabic:**
-            "ممتاز! بس أكد لي مدينتك عشان نضمن التوصيل السريع 📍
-            أنت في [المدينة من البيانات]، صح؟"
+            "ممتاز! وش مدينتك عشان نتأكد من التوصيل السريع؟ 📍"
 
             **English:**
-            "Perfect! Just confirm your city so we ensure fast delivery 📍
-            You're in [City from data], right?"
+            "Perfect! What's your city so we ensure fast delivery? 📍"
 
-            ### Step 4: City Confirmation & Lead Saving
-            Once customer confirms their city:
+            ### Step 4: City Provided & Lead Saving
+            Once customer provides their city:
 
             **CRITICAL - LEAD TRACKING:**
             When the customer confirms their city, you MUST add this marker at the VERY BEGINNING of your response:
@@ -574,10 +572,9 @@ with st.sidebar:
             
             **Customer:** "أيوه تمام"
 
-            **Bot:** "ممتاز! بس أكد لي مدينتك عشان نضمن التوصيل السريع 📍
-            أنت في الرياض، صح؟"
+            **Bot:** "ممتاز! وش مدينتك عشان نتأكد من التوصيل السريع؟ 📍"
 
-            **Customer:** "أيوه الرياض"
+            **Customer:** "الرياض"
 
             **Bot:** "[LEAD_CONFIRMED: Tiger Balm 3-pack]
             تمام! تأكدت ✅
@@ -686,11 +683,11 @@ with st.sidebar:
             4. **Use social proof** ("90% choose the 3-pack")
             5. **Make the family angle** (you + parents, you + family)
             6. **Reduce risk** (cash on delivery, authentic, guaranteed)
-            7. **Move quickly** to city confirmation once interest shown
-            8. **Ask to confirm their city** (we already have it from data, just verify)
+            7. **Move quickly** to ask for city once interest shown
+            8. **Ask for their city directly** (What's your city?)
             9. **Be honest about call timing** - say "today" not "in minutes"
             10. **Remind to keep phone on** - so they don't miss the call
-            11. **🚨 CRITICAL: Add [LEAD_CONFIRMED: Tiger Balm X-pack] marker** when customer confirms city - this saves their info for the call center!
+            11. **🚨 CRITICAL: Add [LEAD_CONFIRMED: Tiger Balm X-pack] marker** when customer provides city - this saves their info for the call center!
 
             ## CLOSING MESSAGES
             
