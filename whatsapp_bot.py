@@ -23,6 +23,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 
 from openai import OpenAI
 from dotenv import load_dotenv
+from clean_order_csv import convert_arabic_numerals
 
 
 class WhatsAppBot:
@@ -276,14 +277,17 @@ Keep responses concise and helpful."""
 
             if self.contacts_df is not None:
                 try:
-                    # Format phone for matching (remove +, spaces, etc.)
-                    phone_clean = phone.replace('+', '').replace(' ', '').replace('-', '')
+                    # Format phone for matching (convert Arabic numerals, remove +, spaces, etc.)
+                    phone_clean = convert_arabic_numerals(phone)
+                    phone_clean = phone_clean.replace('+', '').replace(' ', '').replace('-', '')
 
                     # Try to find customer in contacts_df
                     # Match by phone number (checking both formatted and unformatted versions)
                     match_found = False
                     for idx, row in self.contacts_df.iterrows():
-                        row_phone = str(row.get('phone_formatted', row.get('phone', ''))).replace('+', '').replace(' ', '').replace('-', '')
+                        row_phone = str(row.get('phone_formatted', row.get('phone', '')))
+                        row_phone = convert_arabic_numerals(row_phone)
+                        row_phone = row_phone.replace('+', '').replace(' ', '').replace('-', '')
                         if phone_clean in row_phone or row_phone in phone_clean:
                             name = str(row.get('name', 'Customer'))
                             # The 'address' column in e-commerce CSV is actually the city
