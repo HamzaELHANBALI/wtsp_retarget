@@ -221,8 +221,12 @@ with st.sidebar:
             "Customize AI Behavior",
             value="""You are a helpful customer service assistant for a business.
 Respond professionally and courteously to customer inquiries.
-Keep responses concise and helpful. Always be polite and friendly.""",
-            height=150,
+Keep responses concise and helpful. Always be polite and friendly.
+
+IMPORTANT: When a customer confirms their purchase and you have collected ALL their order details (name, phone, address, city), you MUST include this marker at the end of your response:
+[LEAD_CONFIRMED: product_name]
+Example: "Great! Your order is confirmed!\n[LEAD_CONFIRMED: Product Name]" """,
+            height=200,
             help="Define how the AI should behave when responding to customers"
         )
 
@@ -328,7 +332,7 @@ Keep responses concise and helpful. Always be polite and friendly.""",
         st.metric("💬 Conversations", len(stats.get('conversation_history', {})))
 
 # Main content area - Tabs
-tab1, tab2, tab3, tab4 = st.tabs(["📤 Bulk Messaging", "🤖 AI Auto-Responder", "📊 Analytics", "❓ Help"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📤 Bulk Messaging", "🤖 AI Auto-Responder", "📊 Analytics", "🎯 Confirmed Leads", "❓ Help"])
 
 # Tab 1: Bulk Messaging
 with tab1:
@@ -1014,7 +1018,157 @@ with tab3:
         st.info("Initialize the bot to see analytics")
 
 # Tab 4: Help
+# Tab 4: Confirmed Leads
 with tab4:
+    st.subheader("🎯 Confirmed Leads")
+
+    if not st.session_state.logged_in:
+        st.warning("⚠️ Please initialize the bot first (see sidebar)")
+    else:
+        st.markdown("""
+        This section shows all customers who have confirmed their purchase during the conversation.
+        The AI automatically detects when customers provide their full order details and saves them here.
+        """)
+
+        # Get leads from bot
+        leads = st.session_state.bot.get_leads()
+
+        if len(leads) == 0:
+            st.info("📭 No confirmed leads yet. When customers confirm their orders, they will appear here automatically.")
+        else:
+            # Summary metrics
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total Leads", len(leads))
+            with col2:
+                pending_count = sum(1 for lead in leads if lead['status'] == 'pending')
+                st.metric("Pending", pending_count)
+            with col3:
+                contacted_count = sum(1 for lead in leads if lead['status'] == 'contacted')
+                st.metric("Contacted", contacted_count)
+            with col4:
+                converted_count = sum(1 for lead in leads if lead['status'] == 'converted')
+                st.metric("Converted", converted_count)
+
+            st.divider()
+
+            # Filter options
+            col1, col2 = st.columns(2)
+            with col1:
+                filter_status = st.selectbox(
+                    "Filter by Status",
+                    options=["All", "pending", "contacted", "converted", "rejected"],
+                    index=0
+                )
+            with col2:
+                search_query = st.text_input("Search by phone or product", placeholder="+966...")
+
+            # Filter leads
+            filtered_leads = leads
+            if filter_status != "All":
+                filtered_leads = [lead for lead in filtered_leads if lead['status'] == filter_status]
+            if search_query:
+                filtered_leads = [
+                    lead for lead in filtered_leads
+                    if search_query.lower() in lead['phone'].lower() or search_query.lower() in lead['product_confirmed'].lower()
+                ]
+
+            st.caption(f"Showing {len(filtered_leads)} of {len(leads)} leads")
+
+            # Display leads table
+            if len(filtered_leads) > 0:
+                # Convert to DataFrame for better display
+                import pandas as pd
+                df_leads = pd.DataFrame(filtered_leads)
+
+                # Display table
+                st.dataframe(
+                    df_leads,
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+                st.divider()
+
+                # Update status section
+                st.markdown("### 📝 Update Lead Status")
+                col1, col2, col3 = st.columns(3)
+
+                with col1:
+                    selected_phone = st.selectbox(
+                        "Select Lead",
+                        options=[lead['phone'] for lead in filtered_leads],
+                        format_func=lambda x: f"{x} - {next((l['product_confirmed'] for l in filtered_leads if l['phone'] == x), '')}"
+                    )
+
+                with col2:
+                    new_status = st.selectbox(
+                        "New Status",
+                        options=["pending", "contacted", "converted", "rejected"]
+                    )
+
+                with col3:
+                    st.write("")  # Spacing
+                    st.write("")  # Spacing
+                    if st.button("Update Status", type="primary"):
+                        st.session_state.bot.update_lead_status(selected_phone, new_status)
+                        st.success(f"✅ Updated {selected_phone} to {new_status}")
+                        st.rerun()
+
+                st.divider()
+
+                # Download section
+                st.markdown("### 📥 Export Leads")
+                st.markdown("Download the confirmed leads CSV file to share with your call center team.")
+
+                import io
+
+                # Create CSV string
+                csv_buffer = io.StringIO()
+                df_leads.to_csv(csv_buffer, index=False)
+                csv_string = csv_buffer.getvalue()
+
+                st.download_button(
+                    label="⬇️ Download Leads CSV",
+                    data=csv_string,
+                    file_name=f"confirmed_leads_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    type="primary"
+                )
+
+                # Show individual lead details
+                st.divider()
+                st.markdown("### 🔍 Lead Details")
+
+                selected_lead_phone = st.selectbox(
+                    "View full details for:",
+                    options=[lead['phone'] for lead in filtered_leads],
+                    format_func=lambda x: f"{x} - {next((l['product_confirmed'] for l in filtered_leads if l['phone'] == x), '')}",
+                    key="lead_details_selector"
+                )
+
+                selected_lead = next((lead for lead in filtered_leads if lead['phone'] == selected_lead_phone), None)
+
+                if selected_lead:
+                    st.markdown(f"**Phone:** {selected_lead['phone']}")
+                    st.markdown(f"**Name:** {selected_lead['name']}")
+                    st.markdown(f"**Product Confirmed:** {selected_lead['product_confirmed']}")
+                    st.markdown(f"**Status:** {selected_lead['status']}")
+                    st.markdown(f"**Timestamp:** {selected_lead['timestamp']}")
+                    st.markdown(f"**Conversation Summary:** {selected_lead['conversation_summary']}")
+
+                    # Show full conversation history if available
+                    if selected_lead_phone in st.session_state.bot.conversations:
+                        st.markdown("**Full Conversation:**")
+                        conversation = st.session_state.bot.conversations[selected_lead_phone]
+                        for msg in conversation:
+                            role = "👤 Customer" if msg['role'] == 'user' else "🤖 AI"
+                            st.markdown(f"**{role}:** {msg['content']}")
+            else:
+                st.info("No leads match your filters.")
+
+# Tab 5: Help
+with tab5:
     st.subheader("❓ Help & Documentation")
 
     st.markdown("""
