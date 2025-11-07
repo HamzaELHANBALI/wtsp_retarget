@@ -132,9 +132,11 @@ Keep responses concise and helpful."""
         # Additional options
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-gpu")  # Required for cloud environments
 
         if headless:
             options.add_argument("--headless=new")
+            options.add_argument("--window-size=1920,1080")  # Set window size for headless
             print("ℹ️  Running in headless mode")
 
         # User agent
@@ -145,9 +147,48 @@ Keep responses concise and helpful."""
         )
 
         try:
-            # Auto-install ChromeDriver
-            service = Service(ChromeDriverManager().install())
-            self.driver = webdriver.Chrome(service=service, options=options)
+            # Check if running in cloud environment with chromium (Streamlit Cloud)
+            chromium_path = None
+            chromium_driver_path = None
+
+            # Common chromium binary locations in cloud environments
+            chromium_locations = [
+                "/usr/bin/chromium",
+                "/usr/bin/chromium-browser",
+                "/usr/bin/google-chrome",
+                "/usr/bin/google-chrome-stable"
+            ]
+
+            chromium_driver_locations = [
+                "/usr/bin/chromedriver",
+                "/usr/local/bin/chromedriver"
+            ]
+
+            # Find chromium binary
+            for path in chromium_locations:
+                if os.path.exists(path):
+                    chromium_path = path
+                    print(f"✅ Found chromium binary: {path}")
+                    break
+
+            # Find chromium driver
+            for path in chromium_driver_locations:
+                if os.path.exists(path):
+                    chromium_driver_path = path
+                    print(f"✅ Found chromium driver: {path}")
+                    break
+
+            # If chromium found, use it (cloud environment)
+            if chromium_path and chromium_driver_path:
+                print("🌩️  Cloud environment detected - using system chromium")
+                options.binary_location = chromium_path
+                service = Service(executable_path=chromium_driver_path)
+                self.driver = webdriver.Chrome(service=service, options=options)
+            else:
+                # Local environment - use ChromeDriverManager
+                print("💻 Local environment detected - using ChromeDriverManager")
+                service = Service(ChromeDriverManager().install())
+                self.driver = webdriver.Chrome(service=service, options=options)
 
             # Stealth modifications
             self.driver.execute_cdp_cmd('Network.setUserAgentOverride', {

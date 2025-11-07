@@ -238,22 +238,38 @@ Keep responses concise and helpful. Always be polite and friendly.""",
 
         if st.button("🚀 Initialize Bot & Login", type="primary"):
             spinner_text = "Reconnecting to saved session..." if has_saved_session else "Initializing bot... Please wait for QR code"
+
+            # Detect if running on Streamlit Cloud (headless required)
+            # Streamlit Cloud sets STREAMLIT_SHARING_MODE environment variable
+            is_cloud = os.getenv("STREAMLIT_SHARING_MODE") is not None or \
+                       os.getenv("STREAMLIT_RUNTIME_ENVIRONMENT") == "cloud"
+
             with st.spinner(spinner_text):
                 try:
-                    # Initialize bot
+                    # Initialize bot with headless mode for cloud deployment
                     st.session_state.bot = WhatsAppBot(
                         openai_api_key=openai_api_key if openai_api_key else None,
                         system_prompt=system_prompt,
-                        headless=False
+                        headless=is_cloud  # Use headless mode in cloud, visible browser locally
                     )
                     st.session_state.logged_in = True
-                    success_msg = "✅ Bot reconnected! Check the browser window." if has_saved_session else "✅ Bot initialized! You should see WhatsApp Web in a browser window."
-                    st.success(success_msg)
-                    if not has_saved_session:
-                        st.info("📱 Scan the QR code with your phone to login")
+
+                    if is_cloud:
+                        success_msg = "✅ Bot initialized in cloud mode!" if not has_saved_session else "✅ Bot reconnected!"
+                        st.success(success_msg)
+                        if not has_saved_session:
+                            st.warning("⚠️ Running in cloud mode - QR code scanning is not available. WhatsApp Web automation has limitations on Streamlit Cloud.")
+                            st.info("💡 For full functionality, run this app locally with: streamlit run streamlit_app.py")
+                    else:
+                        success_msg = "✅ Bot reconnected! Check the browser window." if has_saved_session else "✅ Bot initialized! You should see WhatsApp Web in a browser window."
+                        st.success(success_msg)
+                        if not has_saved_session:
+                            st.info("📱 Scan the QR code with your phone to login")
                     st.rerun()
                 except Exception as e:
                     st.error(f"❌ Failed to initialize bot: {str(e)}")
+                    if is_cloud:
+                        st.info("💡 WhatsApp Web automation requires a local setup. Streamlit Cloud has limitations with browser automation.")
     else:
         st.success("✅ Bot is active")
         st.caption("🔄 If you refresh the page, just click 'Initialize Bot' again - your session is saved!")
