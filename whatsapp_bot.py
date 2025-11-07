@@ -6,6 +6,8 @@ Modern, simplified implementation with robust error handling
 import os
 import time
 import random
+import csv
+import re
 from typing import Optional, List, Dict
 from datetime import datetime
 from pathlib import Path
@@ -107,6 +109,10 @@ Keep responses concise and helpful."""
         self.messages_delivered = 0
         self.messages_read = 0
         self.ai_responses_sent = 0
+
+        # Leads tracking
+        self.leads_file = Path.cwd() / "confirmed_leads.csv"
+        self._initialize_leads_file()
 
         # Setup browser
         self.driver = None
@@ -225,6 +231,123 @@ Keep responses concise and helpful."""
                 phone = '+966' + phone
 
         return phone
+
+    def _initialize_leads_file(self):
+        """Initialize the leads CSV file with headers if it doesn't exist"""
+        if not self.leads_file.exists():
+            with open(self.leads_file, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    'timestamp',
+                    'phone',
+                    'name',
+                    'product_confirmed',
+                    'conversation_summary',
+                    'status'
+                ])
+            print(f"✅ Created leads file: {self.leads_file}")
+
+    def save_lead(self, phone: str, product: str, conversation_summary: str = ""):
+        """
+        Save a confirmed lead to the CSV file
+
+        Args:
+            phone: Customer phone number
+            product: Product name that was confirmed
+            conversation_summary: Brief summary of the conversation
+        """
+        try:
+            # Check if lead already exists
+            existing_leads = self.get_leads()
+            for lead in existing_leads:
+                if lead['phone'] == phone:
+                    print(f"⚠️  Lead already exists for {phone} - skipping duplicate")
+                    return
+
+            # Extract name from conversation history if available
+            name = "Customer"
+            if phone in self.conversations:
+                # Try to find name in conversation
+                for msg in self.conversations[phone]:
+                    if msg['role'] == 'user':
+                        # Simple heuristic: look for patterns like "My name is X" or Arabic equivalent
+                        content = msg['content']
+                        # You can add more sophisticated name extraction here
+                        pass
+
+            # Get timestamp
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            # Append to CSV
+            with open(self.leads_file, 'a', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    timestamp,
+                    phone,
+                    name,
+                    product,
+                    conversation_summary,
+                    'pending'
+                ])
+
+            print(f"✅ Lead saved: {phone} - {product}")
+
+        except Exception as e:
+            print(f"⚠️  Failed to save lead: {e}")
+
+    def get_leads(self) -> List[Dict]:
+        """
+        Read all leads from the CSV file
+
+        Returns:
+            List of lead dictionaries
+        """
+        leads = []
+        try:
+            if self.leads_file.exists():
+                with open(self.leads_file, 'r', encoding='utf-8') as f:
+                    reader = csv.DictReader(f)
+                    leads = list(reader)
+        except Exception as e:
+            print(f"⚠️  Failed to read leads: {e}")
+        return leads
+
+    def update_lead_status(self, phone: str, status: str):
+        """
+        Update the status of a lead
+
+        Args:
+            phone: Customer phone number
+            status: New status (pending/contacted/converted/rejected)
+        """
+        try:
+            leads = self.get_leads()
+
+            # Update the status
+            updated = False
+            for lead in leads:
+                if lead['phone'] == phone:
+                    lead['status'] = status
+                    updated = True
+                    break
+
+            if not updated:
+                print(f"⚠️  Lead not found for {phone}")
+                return
+
+            # Write back to CSV
+            with open(self.leads_file, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=[
+                    'timestamp', 'phone', 'name', 'product_confirmed',
+                    'conversation_summary', 'status'
+                ])
+                writer.writeheader()
+                writer.writerows(leads)
+
+            print(f"✅ Lead status updated: {phone} -> {status}")
+
+        except Exception as e:
+            print(f"⚠️  Failed to update lead status: {e}")
 
     def send_message(
         self,
@@ -1191,12 +1314,35 @@ Keep responses concise and helpful."""
             print(f"✅ AI Response generated: {ai_response[:100]}..." if len(ai_response) > 100 else f"✅ AI Response: {ai_response}", flush=True)
             sys.stdout.flush()
 
-            # Update conversation history
+            # Check for lead confirmation marker
+            lead_confirmed = False
+            product_name = ""
+            clean_response = ai_response
+
+            # Look for [LEAD_CONFIRMED: product_name] pattern
+            lead_pattern = r'\[LEAD_CONFIRMED:\s*([^\]]+)\]'
+            match = re.search(lead_pattern, ai_response)
+
+            if match:
+                lead_confirmed = True
+                product_name = match.group(1).strip()
+                # Remove the marker from the response
+                clean_response = re.sub(lead_pattern, '', ai_response).strip()
+                print(f"🎯 Lead confirmed! Product: {product_name}", flush=True)
+                sys.stdout.flush()
+
+                # Create conversation summary
+                conversation_summary = f"Last message: {message[:100]}"
+
+                # Save the lead
+                self.save_lead(phone, product_name, conversation_summary)
+
+            # Update conversation history (use clean response without marker)
             if phone not in self.conversations:
                 self.conversations[phone] = []
 
             self.conversations[phone].append({"role": "user", "content": message})
-            self.conversations[phone].append({"role": "assistant", "content": ai_response})
+            self.conversations[phone].append({"role": "assistant", "content": clean_response})
 
             # Keep only last 20 messages
             if len(self.conversations[phone]) > 20:
@@ -1204,7 +1350,7 @@ Keep responses concise and helpful."""
 
             print(f"   Conversation history updated ({len(self.conversations[phone])} messages)", flush=True)
             sys.stdout.flush()
-            return ai_response
+            return clean_response
 
         except Exception as e:
             print(f"⚠️  AI response error: {e}", flush=True)
