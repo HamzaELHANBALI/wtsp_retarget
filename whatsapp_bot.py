@@ -910,29 +910,77 @@ Keep responses concise and helpful."""
                 print(f"⚠️  Error sending file path: {e}")
                 raise
 
-            # STEP 4: Wait for upload to complete
-            # Caption was already typed in Step 1, it should automatically appear in preview
-            print("⏳ Waiting for video to finish uploading...")
-            time.sleep(4)
+            # STEP 4: Wait for media preview and ensure caption is in the caption field
+            print("⏳ Waiting for media preview to load...")
+            time.sleep(3)
 
-            # Verify caption is present in the preview
+            # Inject caption directly into the media preview's caption field
+            # The text typed earlier might not transfer properly, so we inject it again
             if caption:
+                print(f"📝 Ensuring caption is in the media preview...")
                 try:
-                    caption_present = self.driver.execute_script("""
-                        const captionBox = document.querySelector('[contenteditable="true"]');
-                        if (captionBox) {
-                            const text = captionBox.textContent || captionBox.innerText || '';
-                            return text.length > 0;
-                        }
-                        return false;
-                    """)
+                    # Find and inject caption into the preview's caption field
+                    caption_injected = self.driver.execute_script(
+                        """
+                        const text = arguments[0];
 
-                    if caption_present:
-                        print(f"✅ Caption is present in preview")
+                        // Find the caption input in the media preview
+                        // It's usually in a div with contenteditable inside the media viewer
+                        const captionBox = document.querySelector('[contenteditable="true"]');
+
+                        if (!captionBox) {
+                            return false;
+                        }
+
+                        // Focus the element
+                        captionBox.focus();
+
+                        // Clear existing content
+                        while (captionBox.firstChild) {
+                            captionBox.removeChild(captionBox.firstChild);
+                        }
+
+                        // Split by newlines and create proper structure
+                        const lines = text.split('\\n');
+                        lines.forEach((line, index) => {
+                            // Create and append text node (handles emojis properly)
+                            if (line.length > 0) {
+                                const textNode = document.createTextNode(line);
+                                captionBox.appendChild(textNode);
+                            }
+
+                            // Add line break after each line except the last
+                            if (index < lines.length - 1) {
+                                const br = document.createElement('br');
+                                captionBox.appendChild(br);
+                            }
+                        });
+
+                        // Trigger events to notify WhatsApp
+                        captionBox.dispatchEvent(new Event('input', {bubbles: true}));
+                        captionBox.dispatchEvent(new Event('change', {bubbles: true}));
+
+                        // Move cursor to end
+                        const range = document.createRange();
+                        const sel = window.getSelection();
+                        range.selectNodeContents(captionBox);
+                        range.collapse(false);
+                        sel.removeAllRanges();
+                        sel.addRange(range);
+
+                        return true;
+                        """,
+                        caption
+                    )
+
+                    if caption_injected:
+                        print(f"✅ Caption injected into preview: {caption[:50]}...")
                     else:
-                        print(f"⚠️  Caption may not be visible, but continuing...")
-                except:
-                    pass
+                        print(f"⚠️  Could not find caption field in preview")
+
+                    time.sleep(1)
+                except Exception as e:
+                    print(f"⚠️  Error injecting caption: {e}")
 
             # STEP 5: Click send button - try multiple methods
             print("📤 Looking for send button...")
