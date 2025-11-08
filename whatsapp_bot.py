@@ -451,29 +451,40 @@ Keep responses concise and helpful."""
             return False
 
     def _send_text(self, message: str) -> bool:
-        """Send text message"""
+        """Send text message with proper line break handling"""
         try:
             # Find message input box
             input_box = self.wait.until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "[contenteditable='true'][data-tab='10']"))
             )
 
-            # Type message using JavaScript (handles emojis properly)
-            self.driver.execute_script(
-                """
-                const el = arguments[0];
-                const text = arguments[1];
-                el.focus();
-                document.execCommand('insertText', false, text);
-                el.dispatchEvent(new Event('input', {bubbles: true}));
-                """,
-                input_box,
-                message
-            )
+            # WhatsApp requires Shift+Enter for line breaks
+            # Split message by newlines and send each part separately
+            lines = message.split('\n')
+
+            for i, line in enumerate(lines):
+                if line:  # Only send non-empty lines
+                    # Type each line using JavaScript (handles emojis properly)
+                    self.driver.execute_script(
+                        """
+                        const el = arguments[0];
+                        const text = arguments[1];
+                        el.focus();
+                        document.execCommand('insertText', false, text);
+                        el.dispatchEvent(new Event('input', {bubbles: true}));
+                        """,
+                        input_box,
+                        line
+                    )
+
+                # Add line break if not the last line
+                if i < len(lines) - 1:
+                    # Send Shift+Enter for line break (not just Enter which would send the message)
+                    input_box.send_keys(Keys.SHIFT, Keys.RETURN)
 
             time.sleep(1)
 
-            # Send
+            # Send the message with Enter
             input_box.send_keys(Keys.RETURN)
             time.sleep(1)
 
