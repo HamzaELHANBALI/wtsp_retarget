@@ -1406,11 +1406,12 @@ Keep responses concise and helpful."""
             sys.stdout.flush()
 
             # Call OpenAI API with explicit timeout
+            # Increased max_tokens to 800 to prevent message truncation
             response = self.openai_client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 temperature=0.7,
-                max_tokens=200,
+                max_tokens=800,  # Increased from 200 to allow complete responses
                 timeout=30.0  # 30 second timeout
             )
 
@@ -1418,6 +1419,121 @@ Keep responses concise and helpful."""
             sys.stdout.flush()
 
             ai_response = response.choices[0].message.content.strip()
+            
+            # Check if response was truncated or appears incomplete
+            finish_reason = response.choices[0].finish_reason
+            needs_completion = False
+            
+            # Detect if response was cut off
+            if finish_reason == "length":
+                needs_completion = True
+                print(f"   ⚠️  Response hit token limit, requesting completion...", flush=True)
+                sys.stdout.flush()
+            elif ai_response and len(ai_response) > 20:
+                # Detect incomplete responses that don't have finish_reason="length" but are still cut off
+                # Common patterns: ends with single digit, incomplete list item, no proper punctuation
+                response_stripped = ai_response.strip()
+                response_end = response_stripped[-1] if response_stripped else ''
+                response_second_last = response_stripped[-2] if len(response_stripped) >= 2 else ''
+                
+                # Check if response ends with incomplete pattern
+                # Ends with single digit (not part of "1:" or "2:" pattern)
+                ends_with_single_digit = (
+                    len(ai_response) > 50 and 
+                    response_end.isdigit() and 
+                    response_second_last != ':' and
+                    response_second_last != '.' and
+                    not (len(response_stripped) >= 3 and response_stripped[-3] == ':')  # Not "1:" pattern
+                )
+                
+                # Ends without proper punctuation
+                ends_without_punctuation = (
+                    response_end not in ['.', '!', '?', ':', ';', '،', '。', ')', ']', '}'] and 
+                    not ai_response.endswith('...') and
+                    len(ai_response) > 100
+                )
+                
+                # Ends with digit after newlines (incomplete list item)
+                ends_with_incomplete_list = (
+                    ai_response.count('\n') > 2 and 
+                    response_end.isdigit() and 
+                    ':\n' not in ai_response[-30:]  # No complete list items in last 30 chars
+                )
+                
+                # If response looks incomplete, request completion
+                if ends_with_single_digit or ends_with_incomplete_list or ends_without_punctuation:
+                    # For single digit endings, almost always incomplete (like ending with just "1")
+                    if ends_with_single_digit or ends_with_incomplete_list:
+                        needs_completion = True
+                        print(f"   ⚠️  Response appears incomplete (ends with: '{ai_response[-30:]}'), requesting completion...", flush=True)
+                        sys.stdout.flush()
+                    # For missing punctuation, only if it's a long response
+                    elif ends_without_punctuation and len(ai_response) > 150:
+                        # Check if last sentence ending is far back
+                        last_sentence_end = max(
+                            ai_response.rfind('.'),
+                            ai_response.rfind('!'),
+                            ai_response.rfind('?'),
+                            ai_response.rfind(':\n'),
+                        )
+                        # If last sentence end is more than 100 chars back, likely incomplete
+                        if last_sentence_end < len(ai_response) - 100:
+                            needs_completion = True
+                            print(f"   ⚠️  Response appears incomplete (no proper ending), requesting completion...", flush=True)
+                            sys.stdout.flush()
+            
+            # If response needs completion, request continuation
+            if needs_completion:
+                # Request continuation to complete the message
+                continuation_messages = messages + [{"role": "assistant", "content": ai_response}]
+                continuation_messages.append({"role": "user", "content": "أكمل رسالتك من حيث توقفت. (Complete your message from where you left off.)"})
+                
+                try:
+                    continuation_response = self.openai_client.chat.completions.create(
+                        model=self.model,
+                        messages=continuation_messages,
+                        temperature=0.7,
+                        max_tokens=400,
+                        timeout=20.0
+                    )
+                    continuation = continuation_response.choices[0].message.content.strip()
+                    # Only append if continuation makes sense (not a duplicate start)
+                    if continuation and len(continuation) > 10:
+                        ai_response = ai_response + " " + continuation
+                        print(f"   ✅ Response completed", flush=True)
+                        sys.stdout.flush()
+                except Exception as e:
+                    print(f"   ⚠️  Could not complete response: {e}", flush=True)
+                    sys.stdout.flush()
+                    # If we can't complete, clean up the incomplete ending
+                    if ai_response:
+                        # Remove incomplete sentences at the end
+                        last_period = ai_response.rfind('.')
+                        last_exclamation = ai_response.rfind('!')
+                        last_question = ai_response.rfind('?')
+                        last_colon = ai_response.rfind(':\n')  # For list items
+                        last_complete = max(last_period, last_exclamation, last_question, last_colon)
+                        
+                        # Only trim if we can keep at least 70% of the message
+                        if last_complete > len(ai_response) * 0.7:
+                            ai_response = ai_response[:last_complete + 1].strip()
+                            print(f"   ⚠️  Trimmed incomplete ending from response", flush=True)
+                            sys.stdout.flush()
+                        # If message ends with a single digit or incomplete pattern, try to remove it
+                        elif ai_response[-1].isdigit() and len(ai_response) > 20:
+                            # Find last proper sentence ending before the digit
+                            before_digit = ai_response[:-1].rstrip()
+                            last_proper_end = max(
+                                before_digit.rfind('.'),
+                                before_digit.rfind('!'),
+                                before_digit.rfind('?'),
+                                before_digit.rfind(':')
+                            )
+                            if last_proper_end > len(before_digit) * 0.6:
+                                ai_response = before_digit[:last_proper_end + 1].strip()
+                                print(f"   ⚠️  Removed incomplete ending pattern", flush=True)
+                                sys.stdout.flush()
+            
             print(f"✅ AI Response generated: {ai_response[:100]}..." if len(ai_response) > 100 else f"✅ AI Response: {ai_response}", flush=True)
             sys.stdout.flush()
 
