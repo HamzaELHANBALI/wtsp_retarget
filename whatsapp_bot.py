@@ -8,6 +8,7 @@ import time
 import random
 import csv
 import re
+import threading
 from typing import Optional, List, Dict
 from datetime import datetime
 from pathlib import Path
@@ -108,6 +109,13 @@ Keep responses concise and helpful."""
         self.last_messages: Dict[str, str] = {}  # Legacy text-based tracking
         self.seen_message_ids: Dict[str, set] = {}  # New ID-based tracking
         self.monitored_contacts: List[str] = []
+        
+        # Automatic monitoring
+        self.auto_monitoring_active = False
+        self.monitoring_thread: Optional[threading.Thread] = None
+        self.monitoring_stopped_contacts: set = set()  # Contacts that have monitoring stopped
+        self.monitoring_check_interval = 5  # Check every 5 seconds
+        self.monitoring_lock = threading.Lock()  # Lock for thread-safe operations
 
         # Statistics
         self.messages_sent = 0
@@ -432,6 +440,12 @@ Keep responses concise and helpful."""
                             "content": message if message else f"[Media: {Path(media_path).name}]"
                         })
                         print(f"   Added offer message to conversation history for {phone}")
+                        
+                        # Automatically start background monitoring if not already running
+                        if not self.auto_monitoring_active:
+                            self.start_auto_monitoring()
+                        else:
+                            print(f"   ✅ Auto-monitoring is already active for this contact")
                     # If already in monitoring, this is an AI response - don't modify history
                     # (History is already managed in generate_ai_response)
                     
@@ -453,6 +467,12 @@ Keep responses concise and helpful."""
                             "content": message if message else f"[Media: {Path(media_path).name}]"
                         })
                         print(f"   Added offer message to conversation history for {phone}")
+                        
+                        # Automatically start background monitoring if not already running
+                        if not self.auto_monitoring_active:
+                            self.start_auto_monitoring()
+                        else:
+                            print(f"   ✅ Auto-monitoring is already active for this contact")
                     # If already in monitoring, this is an AI response - don't modify history
                     
                     return True
@@ -477,6 +497,12 @@ Keep responses concise and helpful."""
                     "content": message
                 })
                 print(f"   Added offer message to conversation history for {phone}")
+                
+                # Automatically start background monitoring if not already running
+                if not self.auto_monitoring_active:
+                    self.start_auto_monitoring()
+                else:
+                    print(f"   ✅ Auto-monitoring is already active for this contact")
             # If already in monitoring, this is an AI response - don't modify history
             # (History is already managed in generate_ai_response)
 
@@ -1481,6 +1507,132 @@ Keep responses concise and helpful."""
         except Exception as e:
             print(f"⚠️  Error starting monitoring for {phone}: {e}")
 
+    def _background_monitoring_loop(self):
+        """Background thread that continuously monitors contacts for new messages"""
+        print("🔄 Background monitoring thread started")
+        
+        while self.auto_monitoring_active:
+            try:
+                # Get list of contacts to monitor (thread-safe)
+                with self.monitoring_lock:
+                    # Only monitor contacts that are not stopped
+                    active_contacts = [
+                        phone for phone in self.monitored_contacts 
+                        if phone not in self.monitoring_stopped_contacts
+                    ]
+                
+                if not active_contacts:
+                    # No contacts to monitor, wait a bit and check again
+                    time.sleep(self.monitoring_check_interval)
+                    continue
+                
+                # Check each contact for new messages
+                for phone in active_contacts:
+                    if not self.auto_monitoring_active:
+                        break
+                    
+                    try:
+                        # Check for new messages
+                        new_msg = self.get_new_messages(phone)
+                        
+                        if new_msg:
+                            print(f"\n📨 New message from {phone}!")
+                            print(f"   Customer: {new_msg[:100]}...")
+                            
+                            # Generate AI response
+                            if self.ai_enabled:
+                                print(f"   🤖 Generating AI response...")
+                                ai_response = self.generate_ai_response(new_msg, phone)
+                                
+                                # Send response
+                                print(f"   📤 Sending AI response...")
+                                if self.send_message(phone, ai_response):
+                                    self.ai_responses_sent += 1
+                                    print(f"   ✅ Response sent successfully to {phone}")
+                                else:
+                                    print(f"   ❌ Failed to send response to {phone}")
+                            else:
+                                print(f"   ⚠️  AI not enabled - skipping response")
+                    
+                    except Exception as e:
+                        print(f"   ⚠️  Error checking/responding to {phone}: {e}")
+                        import traceback
+                        traceback.print_exc()
+                
+                # Wait before next check cycle
+                time.sleep(self.monitoring_check_interval)
+                
+            except Exception as e:
+                print(f"⚠️  Error in background monitoring loop: {e}")
+                import traceback
+                traceback.print_exc()
+                time.sleep(self.monitoring_check_interval)
+        
+        print("🛑 Background monitoring thread stopped")
+
+    def start_auto_monitoring(self):
+        """Start automatic background monitoring for all monitored contacts"""
+        with self.monitoring_lock:
+            if self.auto_monitoring_active:
+                print("ℹ️  Auto-monitoring is already active")
+                return
+            
+            self.auto_monitoring_active = True
+            
+            # Start background monitoring thread
+            self.monitoring_thread = threading.Thread(
+                target=self._background_monitoring_loop,
+                daemon=True,  # Daemon thread so it stops when main program exits
+                name="AutoMonitoringThread"
+            )
+            self.monitoring_thread.start()
+            print(f"✅ Auto-monitoring started (checking every {self.monitoring_check_interval} seconds)")
+            print(f"   Monitoring {len(self.monitored_contacts)} contact(s)")
+
+    def stop_auto_monitoring(self):
+        """Stop automatic background monitoring"""
+        with self.monitoring_lock:
+            if not self.auto_monitoring_active:
+                print("ℹ️  Auto-monitoring is not active")
+                return
+            
+            self.auto_monitoring_active = False
+            print("🛑 Stopping auto-monitoring...")
+        
+        # Wait for thread to finish (with timeout)
+        if self.monitoring_thread and self.monitoring_thread.is_alive():
+            self.monitoring_thread.join(timeout=10)
+        
+        print("✅ Auto-monitoring stopped")
+
+    def stop_monitoring_contact(self, phone: str):
+        """Stop monitoring a specific contact"""
+        phone = self._format_phone(phone)
+        with self.monitoring_lock:
+            if phone in self.monitoring_stopped_contacts:
+                print(f"ℹ️  Monitoring already stopped for {phone}")
+                return
+            
+            self.monitoring_stopped_contacts.add(phone)
+            print(f"🛑 Stopped monitoring for {phone}")
+
+    def resume_monitoring_contact(self, phone: str):
+        """Resume monitoring a specific contact"""
+        phone = self._format_phone(phone)
+        with self.monitoring_lock:
+            if phone not in self.monitoring_stopped_contacts:
+                print(f"ℹ️  Monitoring not stopped for {phone}")
+                return
+            
+            self.monitoring_stopped_contacts.remove(phone)
+            print(f"▶️  Resumed monitoring for {phone}")
+
+    def is_contact_monitoring_stopped(self, phone: str) -> bool:
+        """Check if monitoring is stopped for a contact"""
+        phone = self._format_phone(phone)
+        with self.monitoring_lock:
+            return phone in self.monitoring_stopped_contacts
+
     def initialize_message_tracking(self, phone: str):
         """
         Mark all existing messages from a contact as "seen" to avoid responding to old messages.
@@ -1639,6 +1791,10 @@ Keep responses concise and helpful."""
 
     def close(self):
         """Close browser and cleanup"""
+        # Stop auto-monitoring if active
+        if self.auto_monitoring_active:
+            self.stop_auto_monitoring()
+        
         if self.driver:
             print("\n📊 Final Statistics:")
             stats = self.get_stats()
