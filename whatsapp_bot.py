@@ -849,17 +849,53 @@ Keep responses concise and helpful."""
                     import pyperclip
                     import platform
 
-                    # Wait for upload to start
-                    time.sleep(2)
+                    # Wait for preview to fully load
+                    time.sleep(3)
 
                     # Find the caption input box in the media preview
-                    caption_box = self.wait.until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, "[contenteditable='true']"))
-                    )
+                    # Try multiple selectors - the preview has a specific caption area
+                    caption_box = None
+                    caption_selectors = [
+                        "div[contenteditable='true'][data-tab='10']",  # Main caption box in preview
+                        "div[contenteditable='true'][role='textbox']",  # Alternative
+                        "div[contenteditable='true']",  # Fallback
+                    ]
+
+                    for selector in caption_selectors:
+                        try:
+                            caption_box = self.driver.find_element(By.CSS_SELECTOR, selector)
+                            if caption_box and caption_box.is_displayed():
+                                print(f"✓ Found caption box with: {selector}")
+                                break
+                        except:
+                            continue
+
+                    if not caption_box:
+                        print("⚠️  Could not find caption box, trying JavaScript search...")
+                        # Try finding it with JavaScript
+                        caption_box_found = self.driver.execute_script("""
+                            const editables = document.querySelectorAll('[contenteditable="true"]');
+                            for (let el of editables) {
+                                // Look for the one in the media viewer
+                                if (el.offsetParent !== null && el.isContentEditable) {
+                                    el.focus();
+                                    el.click();
+                                    return true;
+                                }
+                            }
+                            return false;
+                        """)
+
+                        if caption_box_found:
+                            print("✓ Found and focused caption box via JavaScript")
+                            # Get the element again after focusing
+                            caption_box = self.driver.find_element(By.CSS_SELECTOR, "[contenteditable='true']")
+                        else:
+                            raise Exception("Could not find caption input box")
 
                     # Focus the caption box
                     caption_box.click()
-                    time.sleep(0.3)
+                    time.sleep(0.5)
 
                     # Use system clipboard to preserve line breaks
                     pyperclip.copy(caption)
@@ -871,25 +907,35 @@ Keep responses concise and helpful."""
                     else:  # Windows/Linux
                         caption_box.send_keys(Keys.CONTROL, 'v')
 
-                    print(f"✅ Caption pasted into preview: {caption[:50]}...")
+                    print(f"✅ Caption pasted: {caption[:50]}...")
                     time.sleep(1)
 
                     # Verify caption was pasted
                     caption_check = self.driver.execute_script(
                         """
-                        const captionBox = document.querySelector('[contenteditable="true"]');
-                        if (captionBox) {
-                            return captionBox.textContent || captionBox.innerText || '';
+                        const editables = document.querySelectorAll('[contenteditable="true"]');
+                        for (let el of editables) {
+                            if (el.offsetParent !== null) {
+                                const text = el.textContent || el.innerText || '';
+                                if (text.length > 0) {
+                                    return text;
+                                }
+                            }
                         }
                         return '';
                         """
                     )
-                    print(f"✓ Caption in preview: {len(caption_check)} chars")
+
+                    if len(caption_check) > 0:
+                        print(f"✓ Caption verified in preview: {len(caption_check)} chars")
+                    else:
+                        print(f"⚠️  WARNING: Caption may not have been pasted - preview shows 0 chars")
 
                 except Exception as e:
-                    print(f"⚠️  Could not paste caption in preview: {e}")
+                    print(f"❌ ERROR pasting caption: {e}")
                     import traceback
                     traceback.print_exc()
+                    print("⚠️  Video will be sent WITHOUT caption")
 
             # Wait for upload to complete
             print("⏳ Waiting for video to finish uploading...")
