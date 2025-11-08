@@ -1219,47 +1219,53 @@ Keep responses concise and helpful."""
                 messages = result.get('messages', [])
                 msg_count = result.get('count', 0)
                 print(f"📨 JavaScript found {msg_count} incoming messages in chat with {phone}")
-                if msg_count == 0:
+
+                # If JavaScript found messages, trust its result and don't use fallback
+                if msg_count > 0:
+                    # Get seen message IDs for this phone
+                    if not hasattr(self, 'seen_message_ids'):
+                        self.seen_message_ids = {}
+                    if phone not in self.seen_message_ids:
+                        self.seen_message_ids[phone] = set()
+
+                    # Find NEW messages (ones we haven't seen before)
+                    new_messages = []
+                    for msg in messages:
+                        msg_id = msg.get('id', '')
+                        msg_text = msg.get('text', '')
+                        if msg_id and msg_id not in self.seen_message_ids[phone]:
+                            new_messages.append(msg)
+                            print(f"  ✨ NEW: {msg_text[:60]}..." if len(msg_text) > 60 else f"  ✨ NEW: {msg_text}")
+
+                    # If we found new messages, mark them as seen and return the FIRST new one
+                    if new_messages:
+                        # Mark ALL new messages as seen
+                        for msg in new_messages:
+                            self.seen_message_ids[phone].add(msg.get('id', ''))
+
+                        # Keep only last 100 message IDs to avoid memory bloat
+                        if len(self.seen_message_ids[phone]) > 100:
+                            # Convert to list, keep last 100, convert back to set
+                            self.seen_message_ids[phone] = set(list(self.seen_message_ids[phone])[-100:])
+
+                        # Return the FIRST new message (oldest unread)
+                        last_msg = new_messages[0].get('text', '')
+                        print(f"✨ [CALL #{call_id}] Returning FIRST new message from {phone}: {last_msg[:100]}...")
+
+                        # Also update the old tracking for backward compatibility
+                        if last_msg:
+                            self.last_messages[phone] = last_msg
+
+                        return last_msg
+                    else:
+                        # JavaScript found messages but all already seen - TRUST THIS and return None
+                        print(f"ℹ️  [CALL #{call_id}] All messages already seen (JS tracking)")
+                        return None
+                else:
+                    # JavaScript found 0 messages - fallback will be tried below
                     print("⚠️  JavaScript found 0 messages - will try fallback method")
 
-                # Get seen message IDs for this phone
-                if not hasattr(self, 'seen_message_ids'):
-                    self.seen_message_ids = {}
-                if phone not in self.seen_message_ids:
-                    self.seen_message_ids[phone] = set()
-
-                # Find NEW messages (ones we haven't seen before)
-                new_messages = []
-                for msg in messages:
-                    msg_id = msg.get('id', '')
-                    msg_text = msg.get('text', '')
-                    if msg_id and msg_id not in self.seen_message_ids[phone]:
-                        new_messages.append(msg)
-                        print(f"  ✨ NEW: {msg_text[:60]}..." if len(msg_text) > 60 else f"  ✨ NEW: {msg_text}")
-
-                # If we found new messages, mark them as seen and return the FIRST new one
-                if new_messages:
-                    # Mark ALL new messages as seen
-                    for msg in new_messages:
-                        self.seen_message_ids[phone].add(msg.get('id', ''))
-
-                    # Keep only last 100 message IDs to avoid memory bloat
-                    if len(self.seen_message_ids[phone]) > 100:
-                        # Convert to list, keep last 100, convert back to set
-                        self.seen_message_ids[phone] = set(list(self.seen_message_ids[phone])[-100:])
-
-                    # Return the FIRST new message (oldest unread)
-                    last_msg = new_messages[0].get('text', '')
-                    print(f"✨ [CALL #{call_id}] Returning FIRST new message from {phone}: {last_msg[:100]}...")
-
-                    # Also update the old tracking for backward compatibility
-                    if last_msg:
-                        self.last_messages[phone] = last_msg
-                else:
-                    print(f"ℹ️  All messages already seen")
-                    all_incoming = []  # Clear to trigger fallback
-
-            # Strategy 2: Fallback using Selenium if JavaScript method fails
+            # Strategy 2: Fallback using Selenium if JavaScript method fails or found 0 messages
             if not last_msg:
                 print("🔄 Trying fallback method...")
                 # Try different selector combinations
@@ -1289,13 +1295,9 @@ Keep responses concise and helpful."""
                     except Exception as sel_err:
                         continue
 
-            if not last_msg:
+                # Fallback also found no new messages
                 print(f"ℹ️  [CALL #{call_id}] No new messages from {phone}")
                 return None
-
-            # If we got here, last_msg is already set from the ID-based method
-            print(f"✅ [CALL #{call_id}] Returning message: {last_msg[:50]}...")
-            return last_msg
 
         except Exception as e:
             print(f"⚠️  Error checking messages from {phone}: {e}")
