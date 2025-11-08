@@ -852,50 +852,51 @@ Keep responses concise and helpful."""
                     # Wait for preview to fully load
                     time.sleep(3)
 
-                    # Find the caption input box in the media preview
-                    # Try multiple selectors - the preview has a specific caption area
-                    caption_box = None
-                    caption_selectors = [
-                        "div[contenteditable='true'][data-tab='10']",  # Main caption box in preview
-                        "div[contenteditable='true'][role='textbox']",  # Alternative
-                        "div[contenteditable='true']",  # Fallback
-                    ]
+                    # Use JavaScript to find and focus the caption box in the media PREVIEW
+                    # The preview is a modal/dialog that overlays the main chat
+                    caption_ready = self.driver.execute_script("""
+                        // Find the media preview/viewer dialog
+                        const mediaViewer = document.querySelector('[data-animate-media-viewer]') ||
+                                          document.querySelector('[data-testid="media-viewer"]') ||
+                                          document.querySelector('div[role="dialog"]');
 
-                    for selector in caption_selectors:
-                        try:
-                            caption_box = self.driver.find_element(By.CSS_SELECTOR, selector)
-                            if caption_box and caption_box.is_displayed():
-                                print(f"✓ Found caption box with: {selector}")
-                                break
-                        except:
-                            continue
+                        if (!mediaViewer) {
+                            console.log('Media viewer not found');
+                            return false;
+                        }
+
+                        // Find contenteditable inside the media viewer
+                        const captionBox = mediaViewer.querySelector('[contenteditable="true"]');
+
+                        if (!captionBox) {
+                            console.log('Caption box not found in media viewer');
+                            return false;
+                        }
+
+                        // Focus and click using JavaScript (bypasses interception)
+                        captionBox.focus();
+                        captionBox.click();
+
+                        console.log('Caption box focused successfully');
+                        return true;
+                    """)
+
+                    if not caption_ready:
+                        raise Exception("Could not find or focus caption box in media preview")
+
+                    print("✓ Caption box focused in media preview")
+                    time.sleep(0.5)
+
+                    # Get the caption box element for pasting
+                    caption_box = self.driver.execute_script("""
+                        const mediaViewer = document.querySelector('[data-animate-media-viewer]') ||
+                                          document.querySelector('[data-testid="media-viewer"]') ||
+                                          document.querySelector('div[role="dialog"]');
+                        return mediaViewer ? mediaViewer.querySelector('[contenteditable="true"]') : null;
+                    """)
 
                     if not caption_box:
-                        print("⚠️  Could not find caption box, trying JavaScript search...")
-                        # Try finding it with JavaScript
-                        caption_box_found = self.driver.execute_script("""
-                            const editables = document.querySelectorAll('[contenteditable="true"]');
-                            for (let el of editables) {
-                                // Look for the one in the media viewer
-                                if (el.offsetParent !== null && el.isContentEditable) {
-                                    el.focus();
-                                    el.click();
-                                    return true;
-                                }
-                            }
-                            return false;
-                        """)
-
-                        if caption_box_found:
-                            print("✓ Found and focused caption box via JavaScript")
-                            # Get the element again after focusing
-                            caption_box = self.driver.find_element(By.CSS_SELECTOR, "[contenteditable='true']")
-                        else:
-                            raise Exception("Could not find caption input box")
-
-                    # Focus the caption box
-                    caption_box.click()
-                    time.sleep(0.5)
+                        raise Exception("Could not get caption box element")
 
                     # Use system clipboard to preserve line breaks
                     pyperclip.copy(caption)
@@ -911,20 +912,17 @@ Keep responses concise and helpful."""
                     time.sleep(1)
 
                     # Verify caption was pasted
-                    caption_check = self.driver.execute_script(
-                        """
-                        const editables = document.querySelectorAll('[contenteditable="true"]');
-                        for (let el of editables) {
-                            if (el.offsetParent !== null) {
-                                const text = el.textContent || el.innerText || '';
-                                if (text.length > 0) {
-                                    return text;
-                                }
-                            }
-                        }
-                        return '';
-                        """
-                    )
+                    caption_check = self.driver.execute_script("""
+                        const mediaViewer = document.querySelector('[data-animate-media-viewer]') ||
+                                          document.querySelector('[data-testid="media-viewer"]') ||
+                                          document.querySelector('div[role="dialog"]');
+                        if (!mediaViewer) return '';
+
+                        const captionBox = mediaViewer.querySelector('[contenteditable="true"]');
+                        if (!captionBox) return '';
+
+                        return captionBox.textContent || captionBox.innerText || '';
+                    """)
 
                     if len(caption_check) > 0:
                         print(f"✓ Caption verified in preview: {len(caption_check)} chars")
