@@ -95,6 +95,17 @@ def check_and_respond_to_messages():
         print("⚠️  No bot instance found")
         return []
 
+    # Initialize session state for tracking which contacts have been initialized
+    if 'initialized_contacts' not in st.session_state:
+        st.session_state.initialized_contacts = set()
+
+    # Initialize message tracking for any NEW contacts (prevents responding to old messages)
+    for phone in st.session_state.monitored_contacts:
+        if phone not in st.session_state.initialized_contacts:
+            print(f"📋 Initializing message tracking for new contact: {phone}")
+            st.session_state.bot.initialize_message_tracking(phone)
+            st.session_state.initialized_contacts.add(phone)
+
     print(f"\n{'='*60}")
     print(f"🔍 Checking {len(st.session_state.monitored_contacts)} monitored contact(s)...")
     print(f"{'='*60}")
@@ -1333,6 +1344,17 @@ with tab2:
                             st.info("ℹ️ No contacts to check.")
 
             st.caption("💡 Click the button above to manually check for messages and send AI responses.")
+
+            # Reset tracking button (advanced users)
+            with st.expander("⚙️ Advanced Options"):
+                st.markdown("**Reset Message Tracking**")
+                st.caption("Use this if the bot is re-responding to old messages. This will re-initialize tracking for all contacts.")
+                if st.button("🔄 Reset Message Tracking", type="secondary"):
+                    if 'initialized_contacts' in st.session_state:
+                        st.session_state.initialized_contacts.clear()
+                    if st.session_state.bot and hasattr(st.session_state.bot, 'seen_message_ids'):
+                        st.session_state.bot.seen_message_ids.clear()
+                    st.success("✅ Message tracking reset! All contacts will be re-initialized on next check.")
 
             st.divider()
 
