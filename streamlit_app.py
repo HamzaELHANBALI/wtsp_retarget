@@ -1347,14 +1347,28 @@ with tab2:
                         st.error("❌ Please enter OpenAI API key in sidebar")
                     else:
                         # Clear conversation history for new monitoring session
+                        import sys
+                        cleared_count = 0
+                        print("\n" + "="*60, flush=True)
+                        print("🧹 CLEARING CONVERSATION HISTORY FOR NEW MONITORING SESSION", flush=True)
+                        print("="*60, flush=True)
+                        sys.stdout.flush()
+
                         for phone in monitored_contacts:
-                            if phone in st.session_state.bot.conversations:
-                                print(f"   Clearing previous conversation history for {phone}")
-                                st.session_state.bot.conversations[phone] = []
+                            # Always clear (initialize to empty list) regardless of whether it exists
+                            st.session_state.bot.conversations[phone] = []
+                            print(f"   ✓ Cleared conversation history for {phone}", flush=True)
+                            sys.stdout.flush()
+                            cleared_count += 1
+
+                        print(f"✅ Cleared {cleared_count} conversation(s)", flush=True)
+                        print("="*60 + "\n", flush=True)
+                        sys.stdout.flush()
 
                         st.session_state.monitoring = True
                         st.session_state.bot.monitored_contacts = monitored_contacts
                         st.success("✅ Auto-refresh enabled!")
+                        st.info(f"🧹 Cleared {cleared_count} conversation history(s). Starting fresh monitoring session.")
                         st.info(f"Page will auto-refresh every {check_interval} seconds to check for new messages.")
                         st.rerun()
             else:
