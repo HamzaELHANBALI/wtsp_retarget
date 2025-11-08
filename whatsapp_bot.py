@@ -451,36 +451,61 @@ Keep responses concise and helpful."""
             return False
 
     def _send_text(self, message: str) -> bool:
-        """Send text message"""
+        """Send text message with proper line break handling using system clipboard"""
         try:
+            import pyperclip
+
             # Find message input box
             input_box = self.wait.until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "[contenteditable='true'][data-tab='10']"))
             )
 
-            # Type message using JavaScript (handles emojis properly)
-            self.driver.execute_script(
-                """
-                const el = arguments[0];
-                const text = arguments[1];
-                el.focus();
-                document.execCommand('insertText', false, text);
-                el.dispatchEvent(new Event('input', {bubbles: true}));
-                """,
-                input_box,
-                message
-            )
+            # Focus the input box
+            input_box.click()
+            time.sleep(0.5)
+
+            # Copy message to system clipboard
+            # This preserves line breaks exactly as they are
+            pyperclip.copy(message)
+            print(f"📋 Copied message to clipboard ({len(message)} chars, {message.count(chr(10))} line breaks)")
+
+            # Paste using Ctrl+V (Cmd+V on Mac)
+            # This is the most reliable way - same as manual paste
+            import platform
+            if platform.system() == 'Darwin':  # macOS
+                input_box.send_keys(Keys.COMMAND, 'v')
+            else:  # Windows/Linux
+                input_box.send_keys(Keys.CONTROL, 'v')
 
             time.sleep(1)
 
-            # Send
+            # Verify content was pasted
+            content_check = self.driver.execute_script(
+                """
+                const el = arguments[0];
+                return el.textContent || el.innerText || '';
+                """,
+                input_box
+            )
+            print(f"✓ Content in input box: {len(content_check)} chars")
+
+            # Send the message with Enter
             input_box.send_keys(Keys.RETURN)
             time.sleep(1)
 
             return True
 
+        except ImportError:
+            print("⚠️  pyperclip not installed. Installing...")
+            import subprocess
+            import sys
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "pyperclip"])
+            print("✓ pyperclip installed. Please try sending again.")
+            return False
         except Exception as e:
             print(f"⚠️  Error sending text: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
     def _send_media(self, media_path: str, caption: str = "") -> bool:
@@ -519,31 +544,49 @@ Keep responses concise and helpful."""
             else:
                 print(f"🖼️ Sending image")
 
-            # STEP 1: Type caption text FIRST (before attaching media)
-            # This way it automatically becomes the caption when media is attached
+            # STEP 1: Add caption FIRST (before attaching media)
+            # When media is attached, WhatsApp will use this text as the caption
             if caption:
                 print(f"📝 Typing caption first (will become media caption)...")
                 try:
+                    import pyperclip
+                    import platform
+
                     input_box = self.wait.until(
                         EC.presence_of_element_located((By.CSS_SELECTOR, "[contenteditable='true'][data-tab='10']"))
                     )
 
-                    # Type caption using JavaScript (handles emojis)
-                    self.driver.execute_script(
+                    # Focus input box
+                    input_box.click()
+                    time.sleep(0.3)
+
+                    # Use system clipboard to preserve line breaks
+                    pyperclip.copy(caption)
+                    print(f"📋 Caption copied to clipboard ({len(caption)} chars, {caption.count(chr(10))} line breaks)")
+
+                    # Paste with Ctrl+V or Cmd+V
+                    if platform.system() == 'Darwin':  # macOS
+                        input_box.send_keys(Keys.COMMAND, 'v')
+                    else:  # Windows/Linux
+                        input_box.send_keys(Keys.CONTROL, 'v')
+
+                    print(f"✅ Caption pasted in chat input: {caption[:50]}...")
+                    time.sleep(1)
+
+                    # Verify caption was pasted
+                    caption_check = self.driver.execute_script(
                         """
                         const el = arguments[0];
-                        const text = arguments[1];
-                        el.focus();
-                        document.execCommand('insertText', false, text);
-                        el.dispatchEvent(new Event('input', {bubbles: true}));
+                        return el.textContent || el.innerText || '';
                         """,
-                        input_box,
-                        caption
+                        input_box
                     )
-                    print(f"✅ Caption typed: {caption[:50]}...")
-                    time.sleep(1)
+                    print(f"✓ Caption in input box: {len(caption_check)} chars")
+
                 except Exception as e:
-                    print(f"⚠️  Could not type caption: {e}")
+                    print(f"⚠️  Could not paste caption: {e}")
+                    import traceback
+                    traceback.print_exc()
 
             # STEP 2: Click attachment button - try multiple selectors
             print("📎 Opening attachment menu...")
@@ -846,25 +889,6 @@ Keep responses concise and helpful."""
             # Caption should already be there from Step 1
             print("⏳ Waiting for video to finish uploading...")
             time.sleep(4)
-
-            # Verify caption is still there
-            if caption:
-                try:
-                    caption_present = self.driver.execute_script("""
-                        const captionBox = document.querySelector('[contenteditable="true"]');
-                        if (captionBox) {
-                            const text = captionBox.textContent || captionBox.innerText || '';
-                            return text.length > 0;
-                        }
-                        return false;
-                    """)
-
-                    if caption_present:
-                        print(f"✅ Caption is present in preview")
-                    else:
-                        print(f"⚠️  Caption may not be visible, will verify after send...")
-                except:
-                    pass
 
             # STEP 5: Click send button - try multiple methods
             print("📤 Looking for send button...")
