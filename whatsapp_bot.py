@@ -458,40 +458,25 @@ Keep responses concise and helpful."""
                 EC.presence_of_element_located((By.CSS_SELECTOR, "[contenteditable='true'][data-tab='10']"))
             )
 
-            # Type message using JavaScript with proper line break handling
-            # WhatsApp Web requires special handling for newlines - we need to insert <br> elements
-            self.driver.execute_script(
-                """
-                const el = arguments[0];
-                const text = arguments[1];
-                el.focus();
+            # Clear any existing content first
+            input_box.clear()
+            input_box.click()
+            time.sleep(0.3)
 
-                // Clear existing content
-                el.innerHTML = '';
+            # Split message by newlines and type each line with Shift+Enter between them
+            lines = message.split('\n')
+            for i, line in enumerate(lines):
+                # Type the line text
+                input_box.send_keys(line)
 
-                // Split by newlines and create proper DOM structure
-                const lines = text.split('\\n');
-                lines.forEach((line, index) => {
-                    // Insert the line text
-                    const textNode = document.createTextNode(line);
-                    el.appendChild(textNode);
+                # Add line break after each line except the last
+                if i < len(lines) - 1:
+                    # Shift+Enter creates a line break in WhatsApp
+                    input_box.send_keys(Keys.SHIFT, Keys.ENTER)
 
-                    // Add line break after each line except the last
-                    if (index < lines.length - 1) {
-                        el.appendChild(document.createElement('br'));
-                    }
-                });
+            time.sleep(0.5)
 
-                // Trigger input event to notify WhatsApp of the change
-                el.dispatchEvent(new Event('input', {bubbles: true}));
-                """,
-                input_box,
-                message
-            )
-
-            time.sleep(1)
-
-            # Send
+            # Send the message (Enter without Shift)
             input_box.send_keys(Keys.RETURN)
             time.sleep(1)
 
@@ -546,35 +531,22 @@ Keep responses concise and helpful."""
                         EC.presence_of_element_located((By.CSS_SELECTOR, "[contenteditable='true'][data-tab='10']"))
                     )
 
-                    # Type caption using JavaScript with proper line break handling
-                    self.driver.execute_script(
-                        """
-                        const el = arguments[0];
-                        const text = arguments[1];
-                        el.focus();
+                    # Clear and click to focus
+                    input_box.clear()
+                    input_box.click()
+                    time.sleep(0.3)
 
-                        // Clear existing content
-                        el.innerHTML = '';
+                    # Split caption by newlines and type each line with Shift+Enter between them
+                    lines = caption.split('\n')
+                    for i, line in enumerate(lines):
+                        # Type the line text
+                        input_box.send_keys(line)
 
-                        // Split by newlines and create proper DOM structure
-                        const lines = text.split('\\n');
-                        lines.forEach((line, index) => {
-                            // Insert the line text
-                            const textNode = document.createTextNode(line);
-                            el.appendChild(textNode);
+                        # Add line break after each line except the last
+                        if i < len(lines) - 1:
+                            # Shift+Enter creates a line break in WhatsApp
+                            input_box.send_keys(Keys.SHIFT, Keys.ENTER)
 
-                            // Add line break after each line except the last
-                            if (index < lines.length - 1) {
-                                el.appendChild(document.createElement('br'));
-                            }
-                        });
-
-                        // Trigger input event to notify WhatsApp of the change
-                        el.dispatchEvent(new Event('input', {bubbles: true}));
-                        """,
-                        input_box,
-                        caption
-                    )
                     print(f"✅ Caption typed: {caption[:50]}...")
                     time.sleep(1)
                 except Exception as e:
