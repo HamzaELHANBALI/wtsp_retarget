@@ -210,7 +210,7 @@ with st.sidebar:
     # Country Code
     country_code = st.selectbox(
         "Country Code",
-        options=["+966", "+971", "+20", "+1", "+44", "+33", "+49"],
+        options=["+966", "+971", "+20", "+1", "+44","+212", "+33", "+49"],
         index=0,
         help="Select your country code for phone number formatting"
     )
