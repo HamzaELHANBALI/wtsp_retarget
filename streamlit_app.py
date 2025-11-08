@@ -95,78 +95,93 @@ def check_and_respond_to_messages():
         print("⚠️  No bot instance found")
         return []
 
-    # Initialize session state for tracking which contacts have been initialized
-    if 'initialized_contacts' not in st.session_state:
-        st.session_state.initialized_contacts = set()
+    # Prevent concurrent execution (race condition protection)
+    if 'check_in_progress' not in st.session_state:
+        st.session_state.check_in_progress = False
 
-    # Initialize message tracking for any NEW contacts (prevents responding to old messages)
-    for phone in st.session_state.monitored_contacts:
-        if phone not in st.session_state.initialized_contacts:
-            print(f"📋 Initializing message tracking for new contact: {phone}")
-            st.session_state.bot.initialize_message_tracking(phone)
-            st.session_state.initialized_contacts.add(phone)
+    if st.session_state.check_in_progress:
+        print("⚠️  Another check is already in progress, skipping...")
+        return []
 
-    print(f"\n{'='*60}")
-    print(f"🔍 Checking {len(st.session_state.monitored_contacts)} monitored contact(s)...")
-    print(f"{'='*60}")
+    st.session_state.check_in_progress = True
 
-    responses = []
-    for phone in st.session_state.monitored_contacts:
-        try:
-            print(f"\n--- Checking {phone} ---")
-            # Check for new messages
-            new_msg = st.session_state.bot.get_new_messages(phone)
+    try:
+        # Initialize session state for tracking which contacts have been initialized
+        if 'initialized_contacts' not in st.session_state:
+            st.session_state.initialized_contacts = set()
 
-            if new_msg:
-                print(f"✨ NEW MESSAGE DETECTED!")
-                print(f"   From: {phone}")
-                print(f"   Message: {new_msg[:100]}...")
+        # Initialize message tracking for any NEW contacts (prevents responding to old messages)
+        for phone in st.session_state.monitored_contacts:
+            if phone not in st.session_state.initialized_contacts:
+                print(f"📋 Initializing message tracking for new contact: {phone}")
+                st.session_state.bot.initialize_message_tracking(phone)
+                st.session_state.initialized_contacts.add(phone)
 
-                # Generate AI response
-                print(f"📝 Generating AI response...")
-                ai_response = st.session_state.bot.generate_ai_response(new_msg, phone)
+        print(f"\n{'='*60}")
+        print(f"🔍 Checking {len(st.session_state.monitored_contacts)} monitored contact(s)...")
+        print(f"{'='*60}")
 
-                # Send response
-                print(f"📤 Sending AI response...")
-                send_success = st.session_state.bot.send_message(phone, ai_response)
+        responses = []
+        for phone in st.session_state.monitored_contacts:
+            try:
+                print(f"\n--- Checking {phone} ---")
+                # Check for new messages
+                new_msg = st.session_state.bot.get_new_messages(phone)
 
-                if send_success:
-                    print(f"✅ Response sent successfully to {phone}")
+                if new_msg:
+                    print(f"✨ NEW MESSAGE DETECTED!")
+                    print(f"   From: {phone}")
+                    print(f"   Message: {new_msg[:100]}...")
+
+                    # Generate AI response
+                    print(f"📝 Generating AI response...")
+                    ai_response = st.session_state.bot.generate_ai_response(new_msg, phone)
+
+                    # Send response
+                    print(f"📤 Sending AI response...")
+                    send_success = st.session_state.bot.send_message(phone, ai_response)
+
+                    if send_success:
+                        print(f"✅ Response sent successfully to {phone}")
+                    else:
+                        print(f"❌ Failed to send response to {phone}")
+
+                    responses.append({
+                        'phone': phone,
+                        'customer_msg': new_msg,
+                        'ai_response': ai_response,
+                        'success': send_success,
+                        'checked': True
+                    })
                 else:
-                    print(f"❌ Failed to send response to {phone}")
+                    print(f"ℹ️  No new messages from {phone}")
+                    # No new message found - still track that we checked
+                    responses.append({
+                        'phone': phone,
+                        'checked': True,
+                        'no_new_message': True,
+                        'success': False
+                    })
 
+            except Exception as e:
+                print(f"❌ ERROR checking/responding to {phone}: {e}")
+                import traceback
+                traceback.print_exc()
                 responses.append({
                     'phone': phone,
-                    'customer_msg': new_msg,
-                    'ai_response': ai_response,
-                    'success': send_success,
+                    'error': str(e),
+                    'success': False,
                     'checked': True
                 })
-            else:
-                print(f"ℹ️  No new messages from {phone}")
-                # No new message found - still track that we checked
-                responses.append({
-                    'phone': phone,
-                    'checked': True,
-                    'no_new_message': True,
-                    'success': False
-                })
 
-        except Exception as e:
-            print(f"❌ ERROR checking/responding to {phone}: {e}")
-            import traceback
-            traceback.print_exc()
-            responses.append({
-                'phone': phone,
-                'error': str(e),
-                'success': False,
-                'checked': True
-            })
+        print(f"\n{'='*60}")
+        print(f"✅ Check complete. Processed {len(responses)} contact(s)")
+        print(f"{'='*60}\n")
+        return responses
 
-    print(f"\n{'='*60}")
-    print(f"✅ Check complete. Processed {len(responses)} contact(s)")
-    print(f"{'='*60}\n")
-    return responses
+    finally:
+        # Always release the lock, even if an error occurred
+        st.session_state.check_in_progress = False
 
 # Helper functions (existing)
 def validate_phone_number(phone):
