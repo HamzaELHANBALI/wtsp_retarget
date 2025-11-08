@@ -91,18 +91,22 @@ def auto_add_to_monitoring(phone):
 
 def check_and_respond_to_messages():
     """Check all monitored contacts for new messages and respond"""
+    import time
+    import random
+    check_id = random.randint(1000, 9999)
+
     if not st.session_state.bot:
         print("⚠️  No bot instance found")
         return []
 
     print(f"\n{'='*60}")
-    print(f"🔍 Checking {len(st.session_state.monitored_contacts)} monitored contact(s)...")
+    print(f"🔍 [CHECK #{check_id}] Checking {len(st.session_state.monitored_contacts)} monitored contact(s)...")
     print(f"{'='*60}")
 
     responses = []
     for phone in st.session_state.monitored_contacts:
         try:
-            print(f"\n--- Checking {phone} ---")
+            print(f"\n--- [CHECK #{check_id}] Checking {phone} ---")
             # Check for new messages
             new_msg = st.session_state.bot.get_new_messages(phone)
 
@@ -169,7 +173,7 @@ def check_and_respond_to_messages():
             })
 
     print(f"\n{'='*60}")
-    print(f"✅ Check complete. Processed {len(responses)} contact(s)")
+    print(f"✅ [CHECK #{check_id}] Check complete. Processed {len(responses)} contact(s)")
     print(f"{'='*60}\n")
     return responses
 

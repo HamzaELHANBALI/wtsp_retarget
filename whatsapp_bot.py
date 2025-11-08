@@ -1047,9 +1047,11 @@ Keep responses concise and helpful."""
         Returns:
             New message text if found, None otherwise
         """
+        import random
+        call_id = random.randint(1000, 9999)
         try:
             phone = self._format_phone(phone)
-            print(f"🔍 Checking messages from {phone}...")
+            print(f"🔍 [CALL #{call_id}] Checking messages from {phone}...")
 
             # Ensure window is visible (message detection can fail when minimized)
             try:
@@ -1072,14 +1074,14 @@ Keep responses concise and helpful."""
                 "[contenteditable='true'][data-tab='10']",  # Message input box
             ]
 
-            print("⏳ Waiting for chat to load...")
+            print(f"⏳ [CALL #{call_id}] Waiting for chat to load...")
             for selector in chat_selectors:
                 try:
                     element = WebDriverWait(self.driver, 5).until(
                         EC.presence_of_element_located((By.CSS_SELECTOR, selector))
                     )
                     if element:
-                        print(f"✅ Chat loaded (found: {selector})")
+                        print(f"✅ [CALL #{call_id}] Chat loaded (found: {selector})")
                         chat_loaded = True
                         break
                 except TimeoutException:
@@ -1248,7 +1250,7 @@ Keep responses concise and helpful."""
 
                     # Return the FIRST new message (oldest unread)
                     last_msg = new_messages[0].get('text', '')
-                    print(f"✨ Returning FIRST new message from {phone}: {last_msg[:100]}...")
+                    print(f"✨ [CALL #{call_id}] Returning FIRST new message from {phone}: {last_msg[:100]}...")
 
                     # Also update the old tracking for backward compatibility
                     if last_msg:
@@ -1288,10 +1290,11 @@ Keep responses concise and helpful."""
                         continue
 
             if not last_msg:
-                print(f"ℹ️  No new messages from {phone}")
+                print(f"ℹ️  [CALL #{call_id}] No new messages from {phone}")
                 return None
 
             # If we got here, last_msg is already set from the ID-based method
+            print(f"✅ [CALL #{call_id}] Returning message: {last_msg[:50]}...")
             return last_msg
 
         except Exception as e:
