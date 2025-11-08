@@ -1037,7 +1037,7 @@ Keep responses concise and helpful."""
             traceback.print_exc()
             return False
 
-    def get_new_messages(self, phone: str) -> Optional[str]:
+    def get_new_messages(self, phone: str, add_to_context: bool = True) -> Optional[str]:
         """
         Check for new messages from a contact
 
@@ -1247,15 +1247,19 @@ Keep responses concise and helpful."""
                         self.seen_message_ids[phone] = set(list(self.seen_message_ids[phone])[-100:])
 
                     # Add ALL new messages to conversation history as context
-                    if phone not in self.conversations:
-                        self.conversations[phone] = []
+                    # BUT only if add_to_context=True (skip during initialization)
+                    if add_to_context:
+                        if phone not in self.conversations:
+                            self.conversations[phone] = []
 
-                    for msg in new_messages:
-                        msg_text = msg.get('text', '')
-                        if msg_text:
-                            self.conversations[phone].append({"role": "user", "content": msg_text})
+                        for msg in new_messages:
+                            msg_text = msg.get('text', '')
+                            if msg_text:
+                                self.conversations[phone].append({"role": "user", "content": msg_text})
 
-                    print(f"✨ Added {len(new_messages)} new message(s) to conversation context for {phone}")
+                        print(f"✨ Added {len(new_messages)} new message(s) to conversation context for {phone}")
+                    else:
+                        print(f"📋 Marked {len(new_messages)} message(s) as seen (not added to context - initialization mode)")
 
                     # Return the last message text
                     # (All messages are already in conversation history, so AI will have full context)
@@ -1462,9 +1466,9 @@ Keep responses concise and helpful."""
             self.driver.get(url)
             time.sleep(5)
 
-            # Use get_new_messages to populate seen_message_ids without returning anything
-            # This will mark all current messages as "seen"
-            _ = self.get_new_messages(phone)
+            # Use get_new_messages to populate seen_message_ids without adding to context
+            # This will mark all current messages as "seen" but NOT add them to conversation history
+            _ = self.get_new_messages(phone, add_to_context=False)
 
             print(f"✅ Message tracking initialized for {phone}")
             print(f"   {len(self.seen_message_ids.get(phone, set()))} messages marked as seen")
