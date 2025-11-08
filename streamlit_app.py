@@ -1346,6 +1346,12 @@ with tab2:
                     if not openai_api_key:
                         st.error("❌ Please enter OpenAI API key in sidebar")
                     else:
+                        # Clear conversation history for new monitoring session
+                        for phone in monitored_contacts:
+                            if phone in st.session_state.bot.conversations:
+                                print(f"   Clearing previous conversation history for {phone}")
+                                st.session_state.bot.conversations[phone] = []
+
                         st.session_state.monitoring = True
                         st.session_state.bot.monitored_contacts = monitored_contacts
                         st.success("✅ Auto-refresh enabled!")
