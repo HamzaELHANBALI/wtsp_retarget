@@ -1447,6 +1447,12 @@ Keep responses concise and helpful."""
             print("⚠️  No contacts to monitor. Send messages first.")
             return
 
+        # Clear conversation history for new monitoring session
+        for phone in self.monitored_contacts:
+            if phone in self.conversations:
+                print(f"   Clearing previous conversation history for {phone}")
+                self.conversations[phone] = []
+
         print(f"\n🤖 AI Monitoring Started")
         print(f"   Monitoring {len(self.monitored_contacts)} contact(s)")
         print(f"   Check interval: {check_interval}s")
