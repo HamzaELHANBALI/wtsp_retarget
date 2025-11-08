@@ -8,6 +8,7 @@ import time
 import random
 import csv
 import re
+import threading
 from typing import Optional, List, Dict
 from datetime import datetime
 from pathlib import Path
@@ -108,6 +109,13 @@ Keep responses concise and helpful."""
         self.last_messages: Dict[str, str] = {}  # Legacy text-based tracking
         self.seen_message_ids: Dict[str, set] = {}  # New ID-based tracking
         self.monitored_contacts: List[str] = []
+        
+        # Automatic monitoring
+        self.auto_monitoring_active = False
+        self.monitoring_thread: Optional[threading.Thread] = None
+        self.monitoring_stopped_contacts: set = set()  # Contacts that have monitoring stopped
+        self.monitoring_check_interval = 5  # Check every 5 seconds
+        self.monitoring_lock = threading.Lock()  # Lock for thread-safe operations
 
         # Statistics
         self.messages_sent = 0
@@ -432,6 +440,12 @@ Keep responses concise and helpful."""
                             "content": message if message else f"[Media: {Path(media_path).name}]"
                         })
                         print(f"   Added offer message to conversation history for {phone}")
+                        
+                        # Automatically start background monitoring if not already running
+                        if not self.auto_monitoring_active:
+                            self.start_auto_monitoring()
+                        else:
+                            print(f"   ✅ Auto-monitoring is already active for this contact")
                     # If already in monitoring, this is an AI response - don't modify history
                     # (History is already managed in generate_ai_response)
                     
@@ -453,6 +467,12 @@ Keep responses concise and helpful."""
                             "content": message if message else f"[Media: {Path(media_path).name}]"
                         })
                         print(f"   Added offer message to conversation history for {phone}")
+                        
+                        # Automatically start background monitoring if not already running
+                        if not self.auto_monitoring_active:
+                            self.start_auto_monitoring()
+                        else:
+                            print(f"   ✅ Auto-monitoring is already active for this contact")
                     # If already in monitoring, this is an AI response - don't modify history
                     
                     return True
@@ -477,6 +497,12 @@ Keep responses concise and helpful."""
                     "content": message
                 })
                 print(f"   Added offer message to conversation history for {phone}")
+                
+                # Automatically start background monitoring if not already running
+                if not self.auto_monitoring_active:
+                    self.start_auto_monitoring()
+                else:
+                    print(f"   ✅ Auto-monitoring is already active for this contact")
             # If already in monitoring, this is an AI response - don't modify history
             # (History is already managed in generate_ai_response)
 
@@ -1380,11 +1406,12 @@ Keep responses concise and helpful."""
             sys.stdout.flush()
 
             # Call OpenAI API with explicit timeout
+            # Increased max_tokens to 800 to prevent message truncation
             response = self.openai_client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 temperature=0.7,
-                max_tokens=200,
+                max_tokens=800,  # Increased from 200 to allow complete responses
                 timeout=30.0  # 30 second timeout
             )
 
@@ -1392,6 +1419,121 @@ Keep responses concise and helpful."""
             sys.stdout.flush()
 
             ai_response = response.choices[0].message.content.strip()
+            
+            # Check if response was truncated or appears incomplete
+            finish_reason = response.choices[0].finish_reason
+            needs_completion = False
+            
+            # Detect if response was cut off
+            if finish_reason == "length":
+                needs_completion = True
+                print(f"   ⚠️  Response hit token limit, requesting completion...", flush=True)
+                sys.stdout.flush()
+            elif ai_response and len(ai_response) > 20:
+                # Detect incomplete responses that don't have finish_reason="length" but are still cut off
+                # Common patterns: ends with single digit, incomplete list item, no proper punctuation
+                response_stripped = ai_response.strip()
+                response_end = response_stripped[-1] if response_stripped else ''
+                response_second_last = response_stripped[-2] if len(response_stripped) >= 2 else ''
+                
+                # Check if response ends with incomplete pattern
+                # Ends with single digit (not part of "1:" or "2:" pattern)
+                ends_with_single_digit = (
+                    len(ai_response) > 50 and 
+                    response_end.isdigit() and 
+                    response_second_last != ':' and
+                    response_second_last != '.' and
+                    not (len(response_stripped) >= 3 and response_stripped[-3] == ':')  # Not "1:" pattern
+                )
+                
+                # Ends without proper punctuation
+                ends_without_punctuation = (
+                    response_end not in ['.', '!', '?', ':', ';', '،', '。', ')', ']', '}'] and 
+                    not ai_response.endswith('...') and
+                    len(ai_response) > 100
+                )
+                
+                # Ends with digit after newlines (incomplete list item)
+                ends_with_incomplete_list = (
+                    ai_response.count('\n') > 2 and 
+                    response_end.isdigit() and 
+                    ':\n' not in ai_response[-30:]  # No complete list items in last 30 chars
+                )
+                
+                # If response looks incomplete, request completion
+                if ends_with_single_digit or ends_with_incomplete_list or ends_without_punctuation:
+                    # For single digit endings, almost always incomplete (like ending with just "1")
+                    if ends_with_single_digit or ends_with_incomplete_list:
+                        needs_completion = True
+                        print(f"   ⚠️  Response appears incomplete (ends with: '{ai_response[-30:]}'), requesting completion...", flush=True)
+                        sys.stdout.flush()
+                    # For missing punctuation, only if it's a long response
+                    elif ends_without_punctuation and len(ai_response) > 150:
+                        # Check if last sentence ending is far back
+                        last_sentence_end = max(
+                            ai_response.rfind('.'),
+                            ai_response.rfind('!'),
+                            ai_response.rfind('?'),
+                            ai_response.rfind(':\n'),
+                        )
+                        # If last sentence end is more than 100 chars back, likely incomplete
+                        if last_sentence_end < len(ai_response) - 100:
+                            needs_completion = True
+                            print(f"   ⚠️  Response appears incomplete (no proper ending), requesting completion...", flush=True)
+                            sys.stdout.flush()
+            
+            # If response needs completion, request continuation
+            if needs_completion:
+                # Request continuation to complete the message
+                continuation_messages = messages + [{"role": "assistant", "content": ai_response}]
+                continuation_messages.append({"role": "user", "content": "أكمل رسالتك من حيث توقفت. (Complete your message from where you left off.)"})
+                
+                try:
+                    continuation_response = self.openai_client.chat.completions.create(
+                        model=self.model,
+                        messages=continuation_messages,
+                        temperature=0.7,
+                        max_tokens=400,
+                        timeout=20.0
+                    )
+                    continuation = continuation_response.choices[0].message.content.strip()
+                    # Only append if continuation makes sense (not a duplicate start)
+                    if continuation and len(continuation) > 10:
+                        ai_response = ai_response + " " + continuation
+                        print(f"   ✅ Response completed", flush=True)
+                        sys.stdout.flush()
+                except Exception as e:
+                    print(f"   ⚠️  Could not complete response: {e}", flush=True)
+                    sys.stdout.flush()
+                    # If we can't complete, clean up the incomplete ending
+                    if ai_response:
+                        # Remove incomplete sentences at the end
+                        last_period = ai_response.rfind('.')
+                        last_exclamation = ai_response.rfind('!')
+                        last_question = ai_response.rfind('?')
+                        last_colon = ai_response.rfind(':\n')  # For list items
+                        last_complete = max(last_period, last_exclamation, last_question, last_colon)
+                        
+                        # Only trim if we can keep at least 70% of the message
+                        if last_complete > len(ai_response) * 0.7:
+                            ai_response = ai_response[:last_complete + 1].strip()
+                            print(f"   ⚠️  Trimmed incomplete ending from response", flush=True)
+                            sys.stdout.flush()
+                        # If message ends with a single digit or incomplete pattern, try to remove it
+                        elif ai_response[-1].isdigit() and len(ai_response) > 20:
+                            # Find last proper sentence ending before the digit
+                            before_digit = ai_response[:-1].rstrip()
+                            last_proper_end = max(
+                                before_digit.rfind('.'),
+                                before_digit.rfind('!'),
+                                before_digit.rfind('?'),
+                                before_digit.rfind(':')
+                            )
+                            if last_proper_end > len(before_digit) * 0.6:
+                                ai_response = before_digit[:last_proper_end + 1].strip()
+                                print(f"   ⚠️  Removed incomplete ending pattern", flush=True)
+                                sys.stdout.flush()
+            
             print(f"✅ AI Response generated: {ai_response[:100]}..." if len(ai_response) > 100 else f"✅ AI Response: {ai_response}", flush=True)
             sys.stdout.flush()
 
@@ -1480,6 +1622,132 @@ Keep responses concise and helpful."""
 
         except Exception as e:
             print(f"⚠️  Error starting monitoring for {phone}: {e}")
+
+    def _background_monitoring_loop(self):
+        """Background thread that continuously monitors contacts for new messages"""
+        print("🔄 Background monitoring thread started")
+        
+        while self.auto_monitoring_active:
+            try:
+                # Get list of contacts to monitor (thread-safe)
+                with self.monitoring_lock:
+                    # Only monitor contacts that are not stopped
+                    active_contacts = [
+                        phone for phone in self.monitored_contacts 
+                        if phone not in self.monitoring_stopped_contacts
+                    ]
+                
+                if not active_contacts:
+                    # No contacts to monitor, wait a bit and check again
+                    time.sleep(self.monitoring_check_interval)
+                    continue
+                
+                # Check each contact for new messages
+                for phone in active_contacts:
+                    if not self.auto_monitoring_active:
+                        break
+                    
+                    try:
+                        # Check for new messages
+                        new_msg = self.get_new_messages(phone)
+                        
+                        if new_msg:
+                            print(f"\n📨 New message from {phone}!")
+                            print(f"   Customer: {new_msg[:100]}...")
+                            
+                            # Generate AI response
+                            if self.ai_enabled:
+                                print(f"   🤖 Generating AI response...")
+                                ai_response = self.generate_ai_response(new_msg, phone)
+                                
+                                # Send response
+                                print(f"   📤 Sending AI response...")
+                                if self.send_message(phone, ai_response):
+                                    self.ai_responses_sent += 1
+                                    print(f"   ✅ Response sent successfully to {phone}")
+                                else:
+                                    print(f"   ❌ Failed to send response to {phone}")
+                            else:
+                                print(f"   ⚠️  AI not enabled - skipping response")
+                    
+                    except Exception as e:
+                        print(f"   ⚠️  Error checking/responding to {phone}: {e}")
+                        import traceback
+                        traceback.print_exc()
+                
+                # Wait before next check cycle
+                time.sleep(self.monitoring_check_interval)
+                
+            except Exception as e:
+                print(f"⚠️  Error in background monitoring loop: {e}")
+                import traceback
+                traceback.print_exc()
+                time.sleep(self.monitoring_check_interval)
+        
+        print("🛑 Background monitoring thread stopped")
+
+    def start_auto_monitoring(self):
+        """Start automatic background monitoring for all monitored contacts"""
+        with self.monitoring_lock:
+            if self.auto_monitoring_active:
+                print("ℹ️  Auto-monitoring is already active")
+                return
+            
+            self.auto_monitoring_active = True
+            
+            # Start background monitoring thread
+            self.monitoring_thread = threading.Thread(
+                target=self._background_monitoring_loop,
+                daemon=True,  # Daemon thread so it stops when main program exits
+                name="AutoMonitoringThread"
+            )
+            self.monitoring_thread.start()
+            print(f"✅ Auto-monitoring started (checking every {self.monitoring_check_interval} seconds)")
+            print(f"   Monitoring {len(self.monitored_contacts)} contact(s)")
+
+    def stop_auto_monitoring(self):
+        """Stop automatic background monitoring"""
+        with self.monitoring_lock:
+            if not self.auto_monitoring_active:
+                print("ℹ️  Auto-monitoring is not active")
+                return
+            
+            self.auto_monitoring_active = False
+            print("🛑 Stopping auto-monitoring...")
+        
+        # Wait for thread to finish (with timeout)
+        if self.monitoring_thread and self.monitoring_thread.is_alive():
+            self.monitoring_thread.join(timeout=10)
+        
+        print("✅ Auto-monitoring stopped")
+
+    def stop_monitoring_contact(self, phone: str):
+        """Stop monitoring a specific contact"""
+        phone = self._format_phone(phone)
+        with self.monitoring_lock:
+            if phone in self.monitoring_stopped_contacts:
+                print(f"ℹ️  Monitoring already stopped for {phone}")
+                return
+            
+            self.monitoring_stopped_contacts.add(phone)
+            print(f"🛑 Stopped monitoring for {phone}")
+
+    def resume_monitoring_contact(self, phone: str):
+        """Resume monitoring a specific contact"""
+        phone = self._format_phone(phone)
+        with self.monitoring_lock:
+            if phone not in self.monitoring_stopped_contacts:
+                print(f"ℹ️  Monitoring not stopped for {phone}")
+                return
+            
+            self.monitoring_stopped_contacts.remove(phone)
+            print(f"▶️  Resumed monitoring for {phone}")
+
+    def is_contact_monitoring_stopped(self, phone: str) -> bool:
+        """Check if monitoring is stopped for a contact"""
+        phone = self._format_phone(phone)
+        with self.monitoring_lock:
+            return phone in self.monitoring_stopped_contacts
 
     def initialize_message_tracking(self, phone: str):
         """
@@ -1639,6 +1907,10 @@ Keep responses concise and helpful."""
 
     def close(self):
         """Close browser and cleanup"""
+        # Stop auto-monitoring if active
+        if self.auto_monitoring_active:
+            self.stop_auto_monitoring()
+        
         if self.driver:
             print("\n📊 Final Statistics:")
             stats = self.get_stats()
