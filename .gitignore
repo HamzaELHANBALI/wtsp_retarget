@@ -48,6 +48,11 @@ Thumbs.db
 
 # CSV files (if they contain sensitive data)
 confirmed_leads.csv
+
+# Sleep prevention scripts
+prevent_sleep.sh
+run_bot_with_no_sleep.sh
+KEEPING_BOT_RUNNING.md
 confirmation_leads.csv
 *_leads.csv
 *confirmation*.csv
