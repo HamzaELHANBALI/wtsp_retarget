@@ -134,8 +134,17 @@ def check_and_respond_to_messages():
                     print(f"   Message: {new_msg[:100]}...")
 
                     # Generate AI response
-                    print(f"📝 Generating AI response...")
-                    ai_response = st.session_state.bot.generate_ai_response(new_msg, phone)
+                    print(f"📝 Generating AI response...", flush=True)
+                    print(f"📝 [DEBUG] About to call generate_ai_response(), bot exists: {st.session_state.bot is not None}", flush=True)
+
+                    try:
+                        ai_response = st.session_state.bot.generate_ai_response(new_msg, phone)
+                        print(f"📝 [DEBUG] AI response received: {ai_response[:50] if ai_response else 'None'}...", flush=True)
+                    except Exception as gen_error:
+                        print(f"❌ [DEBUG] Exception calling generate_ai_response: {gen_error}", flush=True)
+                        import traceback
+                        traceback.print_exc()
+                        ai_response = "Thank you for your message. We'll get back to you soon."
 
                     # Send response
                     print(f"📤 Sending AI response...")
