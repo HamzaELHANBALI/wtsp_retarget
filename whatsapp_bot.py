@@ -407,6 +407,14 @@ Keep responses concise and helpful."""
                 self.messages_failed += 1
                 return False
 
+            # Check if this is the first time we're contacting this customer (initial offer)
+            is_first_contact = phone not in self.monitored_contacts
+            
+            # If this is the first contact, start monitoring BEFORE sending (clears history and marks existing messages as seen)
+            if is_first_contact:
+                self.monitored_contacts.append(phone)
+                self.start_monitoring_contact(phone)
+            
             # Send media if provided
             if media_path and os.path.exists(media_path):
                 media_result = self._send_media(media_path, message)
@@ -414,8 +422,19 @@ Keep responses concise and helpful."""
                     # Media sent successfully
                     print(f"✅ Message with media sent to {phone}")
                     self.messages_sent += 1
-                    if phone not in self.monitored_contacts:
-                        self.monitored_contacts.append(phone)
+                    
+                    # If this is the first contact, add offer message to conversation history
+                    # (History was already cleared in start_monitoring_contact above)
+                    if is_first_contact:
+                        # Add our offer message (caption if media, or full message) as assistant message
+                        self.conversations[phone].append({
+                            "role": "assistant",
+                            "content": message if message else f"[Media: {Path(media_path).name}]"
+                        })
+                        print(f"   Added offer message to conversation history for {phone}")
+                    # If already in monitoring, this is an AI response - don't modify history
+                    # (History is already managed in generate_ai_response)
+                    
                     return True
                 else:
                     # Media send had issues, but might have still sent
@@ -424,8 +443,18 @@ Keep responses concise and helpful."""
                     print("💡 Skipping text fallback to avoid duplicate messages")
                     # Mark as sent anyway - user can check WhatsApp
                     self.messages_sent += 1
-                    if phone not in self.monitored_contacts:
-                        self.monitored_contacts.append(phone)
+                    
+                    # If this is the first contact, add offer message to conversation history
+                    # (History was already cleared in start_monitoring_contact above)
+                    if is_first_contact:
+                        # Add our offer message as assistant message
+                        self.conversations[phone].append({
+                            "role": "assistant",
+                            "content": message if message else f"[Media: {Path(media_path).name}]"
+                        })
+                        print(f"   Added offer message to conversation history for {phone}")
+                    # If already in monitoring, this is an AI response - don't modify history
+                    
                     return True
             else:
                 # No media - send text only
@@ -439,9 +468,17 @@ Keep responses concise and helpful."""
 
             self.messages_sent += 1
 
-            # Add to monitoring list
-            if phone not in self.monitored_contacts:
-                self.monitored_contacts.append(phone)
+            # If this is the first contact, add offer message to conversation history
+            # (History was already cleared in start_monitoring_contact above)
+            if is_first_contact:
+                # Add our offer message as assistant message (from bot)
+                self.conversations[phone].append({
+                    "role": "assistant",
+                    "content": message
+                })
+                print(f"   Added offer message to conversation history for {phone}")
+            # If already in monitoring, this is an AI response - don't modify history
+            # (History is already managed in generate_ai_response)
 
             return True
 
@@ -1404,6 +1441,46 @@ Keep responses concise and helpful."""
             sys.stdout.flush()
             return "Thank you for your message. We'll get back to you soon."
 
+    def start_monitoring_contact(self, phone: str):
+        """
+        Start monitoring a contact - clears conversation history and marks existing messages as seen.
+        Call this when you first add a contact to monitoring.
+
+        Args:
+            phone: Phone number to start monitoring
+        """
+        try:
+            phone = self._format_phone(phone)
+            print(f"🔄 Starting monitoring for {phone}...")
+
+            # Clear any existing conversation history for this customer
+            # This ensures we start fresh from our offer message
+            if phone in self.conversations:
+                print(f"   Clearing previous conversation history for {phone}")
+                self.conversations[phone] = []
+            else:
+                # Initialize empty conversation history
+                self.conversations[phone] = []
+
+            # Mark all existing messages as "seen" to avoid responding to old messages
+            try:
+                # Open chat
+                url = f"https://web.whatsapp.com/send?phone={phone.replace('+', '')}"
+                self.driver.get(url)
+                time.sleep(3)
+
+                # Use get_new_messages to populate seen_message_ids
+                # This will mark all current messages as "seen"
+                _ = self.get_new_messages(phone)
+                print(f"   {len(self.seen_message_ids.get(phone, set()))} existing messages marked as seen")
+            except Exception as e:
+                print(f"   ⚠️  Could not mark existing messages as seen: {e}")
+
+            print(f"✅ Monitoring started for {phone} - conversation history cleared")
+
+        except Exception as e:
+            print(f"⚠️  Error starting monitoring for {phone}: {e}")
+
     def initialize_message_tracking(self, phone: str):
         """
         Mark all existing messages from a contact as "seen" to avoid responding to old messages.
@@ -1447,11 +1524,8 @@ Keep responses concise and helpful."""
             print("⚠️  No contacts to monitor. Send messages first.")
             return
 
-        # Clear conversation history for new monitoring session
-        for phone in self.monitored_contacts:
-            if phone in self.conversations:
-                print(f"   Clearing previous conversation history for {phone}")
-                self.conversations[phone] = []
+        # Note: Conversation history is initialized when messages are sent (in send_message)
+        # We don't clear it here to preserve the context starting from our offer message
 
         print(f"\n🤖 AI Monitoring Started")
         print(f"   Monitoring {len(self.monitored_contacts)} contact(s)")
