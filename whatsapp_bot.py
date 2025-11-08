@@ -451,8 +451,10 @@ Keep responses concise and helpful."""
             return False
 
     def _send_text(self, message: str) -> bool:
-        """Send text message with proper line break handling"""
+        """Send text message with proper line break handling using system clipboard"""
         try:
+            import pyperclip
+
             # Find message input box
             input_box = self.wait.until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "[contenteditable='true'][data-tab='10']"))
@@ -460,55 +462,32 @@ Keep responses concise and helpful."""
 
             # Focus the input box
             input_box.click()
-            time.sleep(0.3)
+            time.sleep(0.5)
 
-            # WhatsApp Web wraps each line in a <div> element
-            # We need to build the proper DOM structure
-            # Use synchronous approach - no async clipboard operations
-            self.driver.execute_script(
-                """
-                const el = arguments[0];
-                const text = arguments[1];
+            # Copy message to system clipboard
+            # This preserves line breaks exactly as they are
+            pyperclip.copy(message)
+            print(f"📋 Copied message to clipboard ({len(message)} chars, {message.count(chr(10))} line breaks)")
 
-                // Clear the input
-                el.innerHTML = '';
-                el.focus();
-
-                // Split text into lines
-                const lines = text.split('\\n');
-
-                // Build the DOM structure WhatsApp expects
-                // Each line should be in a separate text node with <br> between them
-                lines.forEach((line, index) => {
-                    // Create text node for the line
-                    const textNode = document.createTextNode(line);
-                    el.appendChild(textNode);
-
-                    // Add <br> after each line except the last
-                    if (index < lines.length - 1) {
-                        const br = document.createElement('br');
-                        el.appendChild(br);
-                    }
-                });
-
-                // Move cursor to end
-                const range = document.createRange();
-                const sel = window.getSelection();
-                range.selectNodeContents(el);
-                range.collapse(false);
-                sel.removeAllRanges();
-                sel.addRange(range);
-
-                // Trigger events so WhatsApp recognizes the content
-                el.dispatchEvent(new Event('input', {bubbles: true}));
-                el.dispatchEvent(new Event('change', {bubbles: true}));
-                el.dispatchEvent(new KeyboardEvent('keyup', {bubbles: true}));
-                """,
-                input_box,
-                message
-            )
+            # Paste using Ctrl+V (Cmd+V on Mac)
+            # This is the most reliable way - same as manual paste
+            import platform
+            if platform.system() == 'Darwin':  # macOS
+                input_box.send_keys(Keys.COMMAND, 'v')
+            else:  # Windows/Linux
+                input_box.send_keys(Keys.CONTROL, 'v')
 
             time.sleep(1)
+
+            # Verify content was pasted
+            content_check = self.driver.execute_script(
+                """
+                const el = arguments[0];
+                return el.textContent || el.innerText || '';
+                """,
+                input_box
+            )
+            print(f"✓ Content in input box: {len(content_check)} chars")
 
             # Send the message with Enter
             input_box.send_keys(Keys.RETURN)
@@ -516,8 +495,17 @@ Keep responses concise and helpful."""
 
             return True
 
+        except ImportError:
+            print("⚠️  pyperclip not installed. Installing...")
+            import subprocess
+            import sys
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "pyperclip"])
+            print("✓ pyperclip installed. Please try sending again.")
+            return False
         except Exception as e:
             print(f"⚠️  Error sending text: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
     def _send_media(self, media_path: str, caption: str = "") -> bool:
