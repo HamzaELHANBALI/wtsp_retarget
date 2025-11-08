@@ -451,10 +451,8 @@ Keep responses concise and helpful."""
             return False
 
     def _send_text(self, message: str) -> bool:
-        """Send text message with proper line break handling"""
+        """Send text message with proper line break handling using clipboard"""
         try:
-            from selenium.webdriver.common.action_chains import ActionChains
-
             # Find message input box
             input_box = self.wait.until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "[contenteditable='true'][data-tab='10']"))
@@ -464,41 +462,56 @@ Keep responses concise and helpful."""
             input_box.click()
             time.sleep(0.3)
 
-            # WhatsApp Web uses <div> elements for line breaks in contenteditable
-            # We need to build the HTML structure with proper line breaks
-            # Replace \n with <br> and set innerHTML directly
-            message_html = message.replace('\n', '<br>')
-
-            # Set the content using JavaScript with proper HTML structure
-            # This preserves line breaks as WhatsApp expects them
+            # Use clipboard API to paste text with preserved line breaks
+            # This is the most reliable way to preserve formatting in contenteditable elements
             self.driver.execute_script(
                 """
                 const el = arguments[0];
-                const html = arguments[1];
+                const text = arguments[1];
 
                 // Clear the input
                 el.innerHTML = '';
+                el.focus();
 
-                // Set the HTML content with line breaks
-                el.innerHTML = html;
+                // Use Clipboard API to write text
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    // Modern clipboard API
+                    navigator.clipboard.writeText(text).then(() => {
+                        // Paste using execCommand
+                        document.execCommand('paste');
+                    }).catch(err => {
+                        // Fallback: Use execCommand insertText with manual line break handling
+                        console.log('Clipboard API failed, using fallback');
+                        const lines = text.split('\\n');
+                        for (let i = 0; i < lines.length; i++) {
+                            document.execCommand('insertText', false, lines[i]);
+                            if (i < lines.length - 1) {
+                                // Insert line break
+                                document.execCommand('insertLineBreak');
+                            }
+                        }
+                    });
+                } else {
+                    // Fallback for older browsers: use insertLineBreak command
+                    const lines = text.split('\\n');
+                    for (let i = 0; i < lines.length; i++) {
+                        document.execCommand('insertText', false, lines[i]);
+                        if (i < lines.length - 1) {
+                            // Insert line break (creates <br> element)
+                            document.execCommand('insertLineBreak');
+                        }
+                    }
+                }
 
-                // Move cursor to end
-                const range = document.createRange();
-                const sel = window.getSelection();
-                range.selectNodeContents(el);
-                range.collapse(false);
-                sel.removeAllRanges();
-                sel.addRange(range);
-
-                // Trigger input event so WhatsApp recognizes the content
+                // Trigger input event
                 el.dispatchEvent(new Event('input', {bubbles: true}));
-                el.dispatchEvent(new Event('change', {bubbles: true}));
                 """,
                 input_box,
-                message_html
+                message
             )
 
-            time.sleep(1)
+            # Wait for clipboard operation to complete
+            time.sleep(1.5)
 
             # Send the message with Enter
             input_box.send_keys(Keys.RETURN)
