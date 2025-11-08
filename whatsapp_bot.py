@@ -1332,13 +1332,25 @@ Keep responses concise and helpful."""
             AI-generated response
         """
         import sys
-        print(f"\n🤖 Generating AI response for message from {phone}...", flush=True)
-        sys.stdout.flush()  # Force immediate output
-        print(f"   Customer: {message[:100]}..." if len(message) > 100 else f"   Customer: {message}", flush=True)
-        sys.stdout.flush()
 
-        if not self.ai_enabled:
-            print("⚠️  AI not enabled - using default response", flush=True)
+        try:
+            print(f"\n🤖 [ENTER] Generating AI response for message from {phone}...", flush=True)
+            sys.stdout.flush()  # Force immediate output
+            print(f"   Customer: {message[:100]}..." if len(message) > 100 else f"   Customer: {message}", flush=True)
+            sys.stdout.flush()
+
+            print(f"   AI enabled: {self.ai_enabled}", flush=True)
+            sys.stdout.flush()
+
+            if not self.ai_enabled:
+                print("⚠️  AI not enabled - using default response", flush=True)
+                sys.stdout.flush()
+                return "Thank you for your message. We'll get back to you soon."
+        except Exception as e:
+            print(f"❌ ERROR in generate_ai_response (before try block): {e}", flush=True)
+            sys.stdout.flush()
+            import traceback
+            traceback.print_exc()
             sys.stdout.flush()
             return "Thank you for your message. We'll get back to you soon."
 
