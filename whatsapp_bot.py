@@ -553,7 +553,67 @@ Keep responses concise and helpful."""
             else:
                 print(f"🖼️ Sending image")
 
-            # STEP 1: Click attachment button - try multiple selectors
+            # STEP 1: Type message text FIRST (before attaching media)
+            # This way it automatically becomes the caption when media is attached
+            if caption:
+                print(f"📝 Typing message text first (will become media caption)...")
+                try:
+                    input_box = self.wait.until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "[contenteditable='true'][data-tab='10']"))
+                    )
+
+                    # Use JavaScript to insert text with proper emoji and line break handling
+                    self.driver.execute_script(
+                        """
+                        const el = arguments[0];
+                        const text = arguments[1];
+
+                        // Focus the element
+                        el.focus();
+
+                        // Clear existing content
+                        while (el.firstChild) {
+                            el.removeChild(el.firstChild);
+                        }
+
+                        // Split by newlines and create proper structure
+                        const lines = text.split('\\n');
+                        lines.forEach((line, index) => {
+                            // Create and append text node (handles emojis properly)
+                            if (line.length > 0) {
+                                const textNode = document.createTextNode(line);
+                                el.appendChild(textNode);
+                            }
+
+                            // Add line break after each line except the last
+                            if (index < lines.length - 1) {
+                                const br = document.createElement('br');
+                                el.appendChild(br);
+                            }
+                        });
+
+                        // Trigger events to notify WhatsApp
+                        el.dispatchEvent(new Event('input', {bubbles: true}));
+                        el.dispatchEvent(new Event('change', {bubbles: true}));
+
+                        // Move cursor to end
+                        const range = document.createRange();
+                        const sel = window.getSelection();
+                        range.selectNodeContents(el);
+                        range.collapse(false);
+                        sel.removeAllRanges();
+                        sel.addRange(range);
+                        """,
+                        input_box,
+                        caption
+                    )
+
+                    print(f"✅ Message text typed: {caption[:50]}...")
+                    time.sleep(1.5)  # Wait for WhatsApp to register the text
+                except Exception as e:
+                    print(f"⚠️  Could not type message text: {e}")
+
+            # STEP 2: Click attachment button - try multiple selectors
             print("📎 Opening attachment menu...")
 
             attach_selectors = [
@@ -850,78 +910,29 @@ Keep responses concise and helpful."""
                 print(f"⚠️  Error sending file path: {e}")
                 raise
 
-            # STEP 4: Wait for media preview and type caption
-            print("⏳ Waiting for media preview to load...")
-            time.sleep(2)
-
-            # Now type caption in the preview's caption field (not the main chat input)
-            if caption:
-                print(f"📝 Typing caption in media preview...")
-                try:
-                    # Wait for the caption input in the media preview to appear
-                    # This is a different input than the main chat input
-                    time.sleep(1)
-
-                    # Find the caption input box in the media preview
-                    caption_box = self.wait.until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, "[contenteditable='true']"))
-                    )
-
-                    # Use JavaScript to insert caption with proper emoji and line break handling
-                    self.driver.execute_script(
-                        """
-                        const el = arguments[0];
-                        const text = arguments[1];
-
-                        // Focus the element
-                        el.focus();
-
-                        // Clear existing content
-                        while (el.firstChild) {
-                            el.removeChild(el.firstChild);
-                        }
-
-                        // Split by newlines and create proper structure
-                        const lines = text.split('\\n');
-                        lines.forEach((line, index) => {
-                            // Create and append text node (handles emojis properly)
-                            if (line.length > 0) {
-                                const textNode = document.createTextNode(line);
-                                el.appendChild(textNode);
-                            }
-
-                            // Add line break after each line except the last
-                            if (index < lines.length - 1) {
-                                const br = document.createElement('br');
-                                el.appendChild(br);
-                            }
-                        });
-
-                        // Trigger events to notify WhatsApp
-                        el.dispatchEvent(new Event('input', {bubbles: true}));
-                        el.dispatchEvent(new Event('change', {bubbles: true}));
-
-                        // Move cursor to end
-                        const range = document.createRange();
-                        const sel = window.getSelection();
-                        range.selectNodeContents(el);
-                        range.collapse(false);
-                        sel.removeAllRanges();
-                        sel.addRange(range);
-                        """,
-                        caption_box,
-                        caption
-                    )
-
-                    print(f"✅ Caption typed in preview: {caption[:50]}...")
-                    time.sleep(1)
-                except Exception as e:
-                    print(f"⚠️  Could not type caption in preview: {e}")
-                    print(f"   Continuing without caption...")
-
-            # Wait for video to finish uploading
+            # STEP 4: Wait for upload to complete
+            # Caption was already typed in Step 1, it should automatically appear in preview
             print("⏳ Waiting for video to finish uploading...")
-            time.sleep(2)
+            time.sleep(4)
+
+            # Verify caption is present in the preview
+            if caption:
+                try:
+                    caption_present = self.driver.execute_script("""
+                        const captionBox = document.querySelector('[contenteditable="true"]');
+                        if (captionBox) {
+                            const text = captionBox.textContent || captionBox.innerText || '';
+                            return text.length > 0;
+                        }
+                        return false;
+                    """)
+
+                    if caption_present:
+                        print(f"✅ Caption is present in preview")
+                    else:
+                        print(f"⚠️  Caption may not be visible, but continuing...")
+                except:
+                    pass
 
             # STEP 5: Click send button - try multiple methods
             print("📤 Looking for send button...")
