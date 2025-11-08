@@ -458,25 +458,56 @@ Keep responses concise and helpful."""
                 EC.presence_of_element_located((By.CSS_SELECTOR, "[contenteditable='true'][data-tab='10']"))
             )
 
-            # Clear any existing content first
-            input_box.clear()
-            input_box.click()
-            time.sleep(0.3)
+            # Use JavaScript to insert text with proper emoji and line break handling
+            # This approach handles Unicode characters outside BMP (like emojis)
+            self.driver.execute_script(
+                """
+                const el = arguments[0];
+                const text = arguments[1];
 
-            # Split message by newlines and type each line with Shift+Enter between them
-            lines = message.split('\n')
-            for i, line in enumerate(lines):
-                # Type the line text
-                input_box.send_keys(line)
+                // Focus the element
+                el.focus();
 
-                # Add line break after each line except the last
-                if i < len(lines) - 1:
-                    # Shift+Enter creates a line break in WhatsApp
-                    input_box.send_keys(Keys.SHIFT, Keys.ENTER)
+                // Clear existing content
+                while (el.firstChild) {
+                    el.removeChild(el.firstChild);
+                }
+
+                // Split by newlines and create proper structure
+                const lines = text.split('\\n');
+                lines.forEach((line, index) => {
+                    // Create and append text node (handles emojis properly)
+                    if (line.length > 0) {
+                        const textNode = document.createTextNode(line);
+                        el.appendChild(textNode);
+                    }
+
+                    // Add line break after each line except the last
+                    if (index < lines.length - 1) {
+                        const br = document.createElement('br');
+                        el.appendChild(br);
+                    }
+                });
+
+                // Trigger events to notify WhatsApp
+                el.dispatchEvent(new Event('input', {bubbles: true}));
+                el.dispatchEvent(new Event('change', {bubbles: true}));
+
+                // Move cursor to end
+                const range = document.createRange();
+                const sel = window.getSelection();
+                range.selectNodeContents(el);
+                range.collapse(false);
+                sel.removeAllRanges();
+                sel.addRange(range);
+                """,
+                input_box,
+                message
+            )
 
             time.sleep(0.5)
 
-            # Send the message (Enter without Shift)
+            # Send the message (Enter)
             input_box.send_keys(Keys.RETURN)
             time.sleep(1)
 
@@ -531,21 +562,52 @@ Keep responses concise and helpful."""
                         EC.presence_of_element_located((By.CSS_SELECTOR, "[contenteditable='true'][data-tab='10']"))
                     )
 
-                    # Clear and click to focus
-                    input_box.clear()
-                    input_box.click()
-                    time.sleep(0.3)
+                    # Use JavaScript to insert caption with proper emoji and line break handling
+                    # This approach handles Unicode characters outside BMP (like emojis)
+                    self.driver.execute_script(
+                        """
+                        const el = arguments[0];
+                        const text = arguments[1];
 
-                    # Split caption by newlines and type each line with Shift+Enter between them
-                    lines = caption.split('\n')
-                    for i, line in enumerate(lines):
-                        # Type the line text
-                        input_box.send_keys(line)
+                        // Focus the element
+                        el.focus();
 
-                        # Add line break after each line except the last
-                        if i < len(lines) - 1:
-                            # Shift+Enter creates a line break in WhatsApp
-                            input_box.send_keys(Keys.SHIFT, Keys.ENTER)
+                        // Clear existing content
+                        while (el.firstChild) {
+                            el.removeChild(el.firstChild);
+                        }
+
+                        // Split by newlines and create proper structure
+                        const lines = text.split('\\n');
+                        lines.forEach((line, index) => {
+                            // Create and append text node (handles emojis properly)
+                            if (line.length > 0) {
+                                const textNode = document.createTextNode(line);
+                                el.appendChild(textNode);
+                            }
+
+                            // Add line break after each line except the last
+                            if (index < lines.length - 1) {
+                                const br = document.createElement('br');
+                                el.appendChild(br);
+                            }
+                        });
+
+                        // Trigger events to notify WhatsApp
+                        el.dispatchEvent(new Event('input', {bubbles: true}));
+                        el.dispatchEvent(new Event('change', {bubbles: true}));
+
+                        // Move cursor to end
+                        const range = document.createRange();
+                        const sel = window.getSelection();
+                        range.selectNodeContents(el);
+                        range.collapse(false);
+                        sel.removeAllRanges();
+                        sel.addRange(range);
+                        """,
+                        input_box,
+                        caption
+                    )
 
                     print(f"✅ Caption typed: {caption[:50]}...")
                     time.sleep(1)
