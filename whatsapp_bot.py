@@ -547,28 +547,33 @@ Keep responses concise and helpful."""
             # STEP 1: Type caption text FIRST (before attaching media)
             # This way it automatically becomes the caption when media is attached
             if caption:
-                print(f"📝 Typing caption first (will become media caption)...")
+                print(f"📝 Typing caption with line breaks preserved...")
                 try:
+                    import pyperclip
+                    import platform
+
                     input_box = self.wait.until(
                         EC.presence_of_element_located((By.CSS_SELECTOR, "[contenteditable='true'][data-tab='10']"))
                     )
 
-                    # Type caption using JavaScript (handles emojis)
-                    self.driver.execute_script(
-                        """
-                        const el = arguments[0];
-                        const text = arguments[1];
-                        el.focus();
-                        document.execCommand('insertText', false, text);
-                        el.dispatchEvent(new Event('input', {bubbles: true}));
-                        """,
-                        input_box,
-                        caption
-                    )
-                    print(f"✅ Caption typed: {caption[:50]}...")
+                    # Focus input box
+                    input_box.click()
+                    time.sleep(0.3)
+
+                    # Use system clipboard to preserve line breaks
+                    pyperclip.copy(caption)
+                    print(f"📋 Caption copied to clipboard ({len(caption)} chars, {caption.count(chr(10))} line breaks)")
+
+                    # Paste with Ctrl+V or Cmd+V
+                    if platform.system() == 'Darwin':  # macOS
+                        input_box.send_keys(Keys.COMMAND, 'v')
+                    else:  # Windows/Linux
+                        input_box.send_keys(Keys.CONTROL, 'v')
+
+                    print(f"✅ Caption pasted: {caption[:50]}...")
                     time.sleep(1)
                 except Exception as e:
-                    print(f"⚠️  Could not type caption: {e}")
+                    print(f"⚠️  Could not paste caption: {e}")
 
             # STEP 2: Click attachment button - try multiple selectors
             print("📎 Opening attachment menu...")
