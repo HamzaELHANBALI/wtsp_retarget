@@ -81,13 +81,15 @@ if 'auto_monitoring_enabled' not in st.session_state:
 
 # Helper functions
 def auto_add_to_monitoring(phone):
-    """Automatically add phone to monitoring list"""
+    """Automatically add phone to monitoring list and clear conversation history"""
     if phone not in st.session_state.monitored_contacts:
         st.session_state.monitored_contacts.append(phone)
         # Also add to bot if exists
         if st.session_state.bot:
             if phone not in st.session_state.bot.monitored_contacts:
                 st.session_state.bot.monitored_contacts.append(phone)
+                # Clear conversation history when starting to monitor this contact
+                st.session_state.bot.start_monitoring_contact(phone)
 
 def check_and_respond_to_messages():
     """Check all monitored contacts for new messages and respond"""
@@ -1272,6 +1274,12 @@ with tab2:
                     formatted = format_phone_number(manual_phone, country_code)
                     if formatted not in st.session_state.monitored_contacts:
                         st.session_state.monitored_contacts.append(formatted)
+                        # Also add to bot and clear history if bot exists
+                        if st.session_state.bot:
+                            if formatted not in st.session_state.bot.monitored_contacts:
+                                st.session_state.bot.monitored_contacts.append(formatted)
+                                # Clear conversation history when starting to monitor this contact
+                                st.session_state.bot.start_monitoring_contact(formatted)
                         st.success(f"✅ Added {formatted} to monitoring list")
                         st.info("🔄 Refresh the page to see it in the list above")
                     else:
@@ -1298,6 +1306,15 @@ with tab2:
                     st.error("❌ Please enter OpenAI API key in sidebar")
                 else:
                     with st.spinner(f"Checking {len(monitored_contacts)} contacts for new messages..."):
+                        # Update bot's monitored contacts and clear history for new ones
+                        old_monitored = set(st.session_state.bot.monitored_contacts)
+                        new_monitored = set(monitored_contacts)
+                        newly_added = new_monitored - old_monitored
+                        
+                        # Clear history for newly added contacts
+                        for phone in newly_added:
+                            st.session_state.bot.start_monitoring_contact(phone)
+                        
                         # Update bot's monitored contacts
                         st.session_state.bot.monitored_contacts = monitored_contacts
                         # Check and respond
@@ -1365,6 +1382,15 @@ with tab2:
 
                 # Auto-check for messages when monitoring is enabled
                 with st.spinner("Checking for new messages..."):
+                    # Update bot's monitored contacts and clear history for new ones
+                    old_monitored = set(st.session_state.bot.monitored_contacts)
+                    new_monitored = set(monitored_contacts)
+                    newly_added = new_monitored - old_monitored
+                    
+                    # Clear history for newly added contacts
+                    for phone in newly_added:
+                        st.session_state.bot.start_monitoring_contact(phone)
+                    
                     # Update bot's monitored contacts
                     st.session_state.bot.monitored_contacts = monitored_contacts
                     # Check and respond automatically
