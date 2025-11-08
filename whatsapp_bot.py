@@ -23,6 +23,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 
 from openai import OpenAI
 from dotenv import load_dotenv
+from clean_order_csv import convert_arabic_numerals
 
 
 class WhatsAppBot:
@@ -40,7 +41,8 @@ class WhatsAppBot:
         self,
         openai_api_key: Optional[str] = None,
         system_prompt: Optional[str] = None,
-        headless: bool = False
+        headless: bool = False,
+        contacts_df = None
     ):
         """
         Initialize WhatsApp Bot
@@ -49,9 +51,13 @@ class WhatsAppBot:
             openai_api_key: OpenAI API key (or set in .env file)
             system_prompt: Custom AI system prompt
             headless: Run browser in headless mode (not recommended for WhatsApp)
+            contacts_df: DataFrame with customer data (name, phone, address/city)
         """
         # Load environment variables
         load_dotenv()
+
+        # Store contacts dataframe for customer lookup
+        self.contacts_df = contacts_df
 
         # Setup OpenAI
         api_key = openai_api_key or os.getenv('OPENAI_API_KEY')
@@ -241,6 +247,7 @@ Keep responses concise and helpful."""
                     'timestamp',
                     'phone',
                     'name',
+                    'city',
                     'product_confirmed',
                     'conversation_summary',
                     'status'
@@ -257,23 +264,35 @@ Keep responses concise and helpful."""
             conversation_summary: Brief summary of the conversation
         """
         try:
-            # Check if lead already exists
-            existing_leads = self.get_leads()
-            for lead in existing_leads:
-                if lead['phone'] == phone:
-                    print(f"⚠️  Lead already exists for {phone} - skipping duplicate")
-                    return
-
-            # Extract name from conversation history if available
+            # Lookup customer data from contacts_df
             name = "Customer"
-            if phone in self.conversations:
-                # Try to find name in conversation
-                for msg in self.conversations[phone]:
-                    if msg['role'] == 'user':
-                        # Simple heuristic: look for patterns like "My name is X" or Arabic equivalent
-                        content = msg['content']
-                        # You can add more sophisticated name extraction here
-                        pass
+            city = ""
+
+            if self.contacts_df is not None:
+                try:
+                    # Format phone for matching (convert Arabic numerals, remove +, spaces, etc.)
+                    phone_clean = convert_arabic_numerals(phone)
+                    phone_clean = phone_clean.replace('+', '').replace(' ', '').replace('-', '')
+
+                    # Try to find customer in contacts_df
+                    # Match by phone number (checking both formatted and unformatted versions)
+                    match_found = False
+                    for idx, row in self.contacts_df.iterrows():
+                        row_phone = str(row.get('phone_formatted', row.get('phone', '')))
+                        row_phone = convert_arabic_numerals(row_phone)
+                        row_phone = row_phone.replace('+', '').replace(' ', '').replace('-', '')
+                        if phone_clean in row_phone or row_phone in phone_clean:
+                            name = str(row.get('name', 'Customer'))
+                            # The 'address' column in e-commerce CSV is actually the city
+                            city = str(row.get('address', ''))
+                            match_found = True
+                            print(f"✅ Found customer in contacts: {name} from {city}")
+                            break
+
+                    if not match_found:
+                        print(f"⚠️  Customer {phone} not found in contacts CSV - using defaults")
+                except Exception as lookup_err:
+                    print(f"⚠️  Error looking up customer data: {lookup_err}")
 
             # Get timestamp
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -285,12 +304,13 @@ Keep responses concise and helpful."""
                     timestamp,
                     phone,
                     name,
+                    city,
                     product,
                     conversation_summary,
                     'pending'
                 ])
 
-            print(f"✅ Lead saved: {phone} - {product}")
+            print(f"✅ Lead saved: {name} ({phone}) from {city} - {product}")
 
         except Exception as e:
             print(f"⚠️  Failed to save lead: {e}")
@@ -338,7 +358,7 @@ Keep responses concise and helpful."""
             # Write back to CSV
             with open(self.leads_file, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.DictWriter(f, fieldnames=[
-                    'timestamp', 'phone', 'name', 'product_confirmed',
+                    'timestamp', 'phone', 'name', 'city', 'product_confirmed',
                     'conversation_summary', 'status'
                 ])
                 writer.writeheader()

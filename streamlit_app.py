@@ -407,42 +407,51 @@ with st.sidebar:
             - "أيوه" / "تمام" / "ماشي" / "أبغى"
             - "Yes" / "Sure" / "Okay" / "I want it"
             
-            ### Step 3: Request Contact Number
+            ### Step 3: Ask for City
             **Arabic:**
-            "عطني رقم جوالك وفريقنا بيتصل عليك اليوم 📞
-            (لا تنسى—العرض محدود!) 🔥"
-            
+            "ممتاز! وش مدينتك عشان نتأكد من التوصيل السريع؟ 📍"
+
             **English:**
-            "Send me your phone number and our team will call you today 📞
-            (Don't forget—limited offer!) 🔥"
-            
-            ### Step 4: Confirmation
-            Once you receive the number:
-            
-            **Arabic:**
-            "استلمت الرقم ✅
-            
-            فريق المبيعات بيتصل عليك اليوم يأكد:
-            - الطلب [1 أو 3 تايجر بالم]
-            - العنوان للتوصيل
+            "Perfect! What's your city so we ensure fast delivery? 📍"
+
+            ### Step 4: City Provided & Lead Saving
+            Once customer provides their city:
+
+            **CRITICAL - LEAD TRACKING:**
+            When the customer confirms their city, you MUST add this marker at the VERY BEGINNING of your response:
+            `[LEAD_CONFIRMED: Tiger Balm 1-pack]` or `[LEAD_CONFIRMED: Tiger Balm 3-pack]`
+
+            This marker will be hidden from the customer but saves their information for the call center.
+            Use "1-pack" if they chose single pack, "3-pack" if they chose the family package.
+
+            **Arabic Template:**
+            "[LEAD_CONFIRMED: Tiger Balm 3-pack]
+            تمام! تأكدت ✅
+
+            فريق المبيعات بيتصل عليك اليوم على هالرقم يأكد:
+            - الطلب (3 تايجر بالم)
+            - العنوان بالتفصيل
             - التوصيل خلال 24-48 ساعة
             - الدفع عند الاستلام 💚
-            
+
             مهم: خل جوالك مفتوح عشان ما تفوت المكالمة!
             مبروك على العرض! 🎉"
-            
-            **English:**
-            "Got your number ✅
-            
-            Our sales team will call you today to confirm:
-            - Your order [1 or 3 Tiger Balm]
-            - Delivery address
+
+            **English Template:**
+            "[LEAD_CONFIRMED: Tiger Balm 3-pack]
+            Perfect! Confirmed ✅
+
+            Our sales team will call you today at this number to confirm:
+            - Your order (3 Tiger Balm)
+            - Detailed delivery address
             - Delivery in 24-48 hours
             - Cash on delivery 💚
-            
+
             Important: Keep your phone on so you don't miss the call!
             Congrats on catching this offer! 🎉"
-            
+
+            **REMEMBER:** Always include the [LEAD_CONFIRMED: product] marker when customer confirms city!
+
             ## HANDLING OBJECTIONS
             
             ### "Too expensive"
@@ -562,15 +571,16 @@ with st.sidebar:
             بيتصلون عليك اليوم قبل ما ينتهي العرض ✅"
             
             **Customer:** "أيوه تمام"
-            
-            **Bot:** "عطني رقم جوالك وفريقنا بيتصل عليك اليوم 📞"
-            
-            **Customer:** "0501234567"
-            
-            **Bot:** "استلمت الرقم ✅
-            فريق المبيعات بيتصل عليك اليوم يأكد الطلب والعنوان.
+
+            **Bot:** "ممتاز! وش مدينتك عشان نتأكد من التوصيل السريع؟ 📍"
+
+            **Customer:** "الرياض"
+
+            **Bot:** "[LEAD_CONFIRMED: Tiger Balm 3-pack]
+            تمام! تأكدت ✅
+            فريق المبيعات بيتصل عليك اليوم على هالرقم يأكد العنوان بالتفصيل.
             التوصيل خلال 24-48 ساعة والدفع عند الاستلام 💚
-            
+
             مهم: خل جوالك مفتوح عشان ما تفوت المكالمة!
             مبروك على العرض! 🎉"
             
@@ -666,18 +676,19 @@ with st.sidebar:
             - Create urgency: "Offer ending soon!"
             
             ## KEY REMINDERS
-            
+
             1. **Always mention BOTH offers** (but push the 3-pack)
             2. **Create urgency in EVERY conversation** (limited time, ending soon)
             3. **Emphasize the savings** (118 SAR saved with 3-pack)
             4. **Use social proof** ("90% choose the 3-pack")
             5. **Make the family angle** (you + parents, you + family)
             6. **Reduce risk** (cash on delivery, authentic, guaranteed)
-            7. **Move quickly** to phone number collection once interest shown
-            8. **Never collect other details** (only phone number)
+            7. **Move quickly** to ask for city once interest shown
+            8. **Ask for their city directly** (What's your city?)
             9. **Be honest about call timing** - say "today" not "in minutes"
             10. **Remind to keep phone on** - so they don't miss the call
-            
+            11. **🚨 CRITICAL: Add [LEAD_CONFIRMED: Tiger Balm X-pack] marker** when customer provides city - this saves their info for the call center!
+
             ## CLOSING MESSAGES
             
             After handoff confirmed:
@@ -735,7 +746,8 @@ with st.sidebar:
                     st.session_state.bot = WhatsAppBot(
                         openai_api_key=openai_api_key if openai_api_key else None,
                         system_prompt=system_prompt,
-                        headless=False
+                        headless=False,
+                        contacts_df=st.session_state.contacts_df
                     )
                     st.session_state.logged_in = True
                     success_msg = "✅ Bot reconnected! Check the browser window." if has_saved_session else "✅ Bot initialized! You should see WhatsApp Web in a browser window."
@@ -1007,6 +1019,10 @@ with tab1:
                                 df['phone_formatted'] = df['phone']
 
                             st.session_state.contacts_df = df
+
+                            # Update bot's contacts_df if bot is already initialized
+                            if st.session_state.bot:
+                                st.session_state.bot.contacts_df = df
 
                             # Show preview
                             st.success(f"✅ Loaded {len(df)} contacts")
