@@ -453,34 +453,50 @@ Keep responses concise and helpful."""
     def _send_text(self, message: str) -> bool:
         """Send text message with proper line break handling"""
         try:
+            from selenium.webdriver.common.action_chains import ActionChains
+
             # Find message input box
             input_box = self.wait.until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "[contenteditable='true'][data-tab='10']"))
             )
 
-            # WhatsApp requires Shift+Enter for line breaks
-            # Split message by newlines and send each part separately
-            lines = message.split('\n')
+            # Focus the input box
+            input_box.click()
+            time.sleep(0.3)
 
-            for i, line in enumerate(lines):
-                if line:  # Only send non-empty lines
-                    # Type each line using JavaScript (handles emojis properly)
-                    self.driver.execute_script(
-                        """
-                        const el = arguments[0];
-                        const text = arguments[1];
-                        el.focus();
-                        document.execCommand('insertText', false, text);
-                        el.dispatchEvent(new Event('input', {bubbles: true}));
-                        """,
-                        input_box,
-                        line
-                    )
+            # WhatsApp Web uses <div> elements for line breaks in contenteditable
+            # We need to build the HTML structure with proper line breaks
+            # Replace \n with <br> and set innerHTML directly
+            message_html = message.replace('\n', '<br>')
 
-                # Add line break if not the last line
-                if i < len(lines) - 1:
-                    # Send Shift+Enter for line break (not just Enter which would send the message)
-                    input_box.send_keys(Keys.SHIFT, Keys.RETURN)
+            # Set the content using JavaScript with proper HTML structure
+            # This preserves line breaks as WhatsApp expects them
+            self.driver.execute_script(
+                """
+                const el = arguments[0];
+                const html = arguments[1];
+
+                // Clear the input
+                el.innerHTML = '';
+
+                // Set the HTML content with line breaks
+                el.innerHTML = html;
+
+                // Move cursor to end
+                const range = document.createRange();
+                const sel = window.getSelection();
+                range.selectNodeContents(el);
+                range.collapse(false);
+                sel.removeAllRanges();
+                sel.addRange(range);
+
+                // Trigger input event so WhatsApp recognizes the content
+                el.dispatchEvent(new Event('input', {bubbles: true}));
+                el.dispatchEvent(new Event('change', {bubbles: true}));
+                """,
+                input_box,
+                message_html
+            )
 
             time.sleep(1)
 
