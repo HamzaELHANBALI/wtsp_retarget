@@ -782,11 +782,9 @@ with tab1:
     if not st.session_state.logged_in:
         st.warning("⚠️ Please initialize the bot and login to WhatsApp first (see sidebar)")
     else:
-        # Test Message Section (at the top)
-        st.markdown("### 🧪 Test Message (Recommended Before Bulk Sending)")
-
-        with st.expander("📱 Send Test Message to One Number", expanded=True):
-            st.info("💡 **Tip:** Always test with your own number first to verify everything works!")
+        # Test Message Section (collapsed by default)
+        with st.expander("🧪 Test Message (Optional - Expand to test before bulk sending)", expanded=False):
+            st.info("💡 **Tip:** Test with your own number first to verify everything works before sending to many contacts!")
 
             test_col1, test_col2 = st.columns([1, 1])
 
@@ -1280,6 +1278,9 @@ with tab2:
                                 st.session_state.bot.monitored_contacts.append(formatted)
                                 # Clear conversation history when starting to monitor this contact
                                 st.session_state.bot.start_monitoring_contact(formatted)
+                                # Start auto-monitoring if not already running
+                                if not st.session_state.bot.auto_monitoring_active:
+                                    st.session_state.bot.start_auto_monitoring()
                         st.success(f"✅ Added {formatted} to monitoring list")
                         st.info("🔄 Refresh the page to see it in the list above")
                     else:
@@ -1289,8 +1290,76 @@ with tab2:
 
             st.divider()
 
+            # Auto-monitoring status
+            st.markdown("### 🔄 Auto-Monitoring Status")
+            if st.session_state.bot:
+                col_status, col_control = st.columns([2, 1])
+                with col_status:
+                    if st.session_state.bot.auto_monitoring_active:
+                        st.success(f"🟢 Auto-monitoring is ACTIVE (checking every {st.session_state.bot.monitoring_check_interval} seconds)")
+                        st.caption(f"Monitoring {len(st.session_state.bot.monitored_contacts)} contact(s)")
+                        
+                        # Show stopped contacts if any
+                        stopped_contacts = list(st.session_state.bot.monitoring_stopped_contacts)
+                        if stopped_contacts:
+                            st.warning(f"⚠️ Monitoring stopped for {len(stopped_contacts)} contact(s)")
+                            with st.expander("View stopped contacts"):
+                                for phone in stopped_contacts:
+                                    st.text(f"  • {phone}")
+                    else:
+                        st.info("ℹ️ Auto-monitoring is not active. It will start automatically when you send messages to contacts.")
+                
+                with col_control:
+                    st.write("")  # Spacing
+                    st.write("")  # Spacing
+                    if st.session_state.bot.auto_monitoring_active:
+                        if st.button("🛑 Stop Auto-Monitoring", type="secondary", use_container_width=True):
+                            st.session_state.bot.stop_auto_monitoring()
+                            st.success("✅ Auto-monitoring stopped")
+                            st.rerun()
+                    else:
+                        if st.button("▶️ Start Auto-Monitoring", type="primary", use_container_width=True, disabled=len(st.session_state.bot.monitored_contacts)==0):
+                            if not openai_api_key:
+                                st.error("❌ Please enter OpenAI API key in sidebar")
+                            else:
+                                st.session_state.bot.start_auto_monitoring()
+                                st.success("✅ Auto-monitoring started")
+                                st.rerun()
+            
+            st.divider()
+
+            # Individual contact monitoring controls
+            if st.session_state.bot and st.session_state.bot.monitored_contacts:
+                st.markdown("### 🎛️ Control Individual Contacts")
+                st.caption("Stop or resume monitoring for specific contacts")
+                
+                # Create columns for contact controls
+                for phone in st.session_state.bot.monitored_contacts[:10]:  # Show first 10 to avoid UI clutter
+                    col_a, col_b, col_c = st.columns([3, 1, 1])
+                    with col_a:
+                        is_stopped = st.session_state.bot.is_contact_monitoring_stopped(phone)
+                        status_icon = "⏸️" if is_stopped else "▶️"
+                        status_text = "STOPPED" if is_stopped else "ACTIVE"
+                        st.text(f"{status_icon} {phone} - {status_text}")
+                    with col_b:
+                        if is_stopped:
+                            if st.button("▶️ Resume", key=f"resume_{phone}"):
+                                st.session_state.bot.resume_monitoring_contact(phone)
+                                st.success(f"✅ Resumed monitoring for {phone}")
+                                st.rerun()
+                        else:
+                            if st.button("⏸️ Stop", key=f"stop_{phone}"):
+                                st.session_state.bot.stop_monitoring_contact(phone)
+                                st.success(f"✅ Stopped monitoring for {phone}")
+                                st.rerun()
+                
+                if len(st.session_state.bot.monitored_contacts) > 10:
+                    st.caption(f"... and {len(st.session_state.bot.monitored_contacts) - 10} more contacts")
+            
+            st.divider()
+
             # Monitoring controls
-            st.markdown("### ⚙️ Monitoring Settings")
+            st.markdown("### ⚙️ Manual Monitoring Settings")
 
             check_interval = st.slider(
                 "Check interval (seconds)",
