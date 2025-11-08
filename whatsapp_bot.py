@@ -1235,7 +1235,7 @@ Keep responses concise and helpful."""
                         new_messages.append(msg)
                         print(f"  ✨ NEW: {msg_text[:60]}..." if len(msg_text) > 60 else f"  ✨ NEW: {msg_text}")
 
-                # If we found new messages, mark them as seen and return the FIRST new one
+                # If we found new messages, mark them as seen and return ALL as context
                 if new_messages:
                     # Mark ALL new messages as seen
                     for msg in new_messages:
@@ -1246,9 +1246,25 @@ Keep responses concise and helpful."""
                         # Convert to list, keep last 100, convert back to set
                         self.seen_message_ids[phone] = set(list(self.seen_message_ids[phone])[-100:])
 
-                    # Return the FIRST new message (oldest unread)
-                    last_msg = new_messages[0].get('text', '')
-                    print(f"✨ Returning FIRST new message from {phone}: {last_msg[:100]}...")
+                    # Add ALL new messages to conversation history as context
+                    if phone not in self.conversations:
+                        self.conversations[phone] = []
+
+                    for msg in new_messages:
+                        msg_text = msg.get('text', '')
+                        if msg_text:
+                            self.conversations[phone].append({"role": "user", "content": msg_text})
+
+                    print(f"✨ Added {len(new_messages)} new message(s) to conversation context for {phone}")
+
+                    # Return the last message text
+                    # (All messages are already in conversation history, so AI will have full context)
+                    last_msg = new_messages[-1].get('text', '')
+
+                    if len(new_messages) > 1:
+                        print(f"✨ Returning last of {len(new_messages)} messages from {phone}: {last_msg[:100]}...")
+                    else:
+                        print(f"✨ Returning message from {phone}: {last_msg[:100]}...")
 
                     # Also update the old tracking for backward compatibility
                     if last_msg:
@@ -1336,8 +1352,17 @@ Keep responses concise and helpful."""
             # Add history (last 10 messages)
             messages.extend(history[-10:])
 
-            # Add current message
-            messages.append({"role": "user", "content": message})
+            # Add current message only if it's not already in history
+            # (get_new_messages() already adds messages to history when processing multiple messages)
+            # Check if the last user message in history matches the current message
+            last_user_msg = None
+            for msg in reversed(history):
+                if msg.get("role") == "user":
+                    last_user_msg = msg.get("content")
+                    break
+
+            if not last_user_msg or last_user_msg != message:
+                messages.append({"role": "user", "content": message})
 
             print(f"   Calling OpenAI {self.model}...", flush=True)
             sys.stdout.flush()
@@ -1385,8 +1410,24 @@ Keep responses concise and helpful."""
             if phone not in self.conversations:
                 self.conversations[phone] = []
 
-            self.conversations[phone].append({"role": "user", "content": message})
+            # Only add user message if it's not already in history
+            # (get_new_messages() already adds messages when processing multiple messages)
+            # Check if the last user message in history matches the current message
+            last_user_msg_in_history = None
+            for msg in reversed(self.conversations[phone]):
+                if msg.get("role") == "user":
+                    last_user_msg_in_history = msg.get("content")
+                    break
+
+            if not last_user_msg_in_history or last_user_msg_in_history != message:
+                self.conversations[phone].append({"role": "user", "content": message})
+                print(f"   Conversation history updated (added user message)", flush=True)
+            else:
+                print(f"   User message already in conversation history (skipped duplicate)", flush=True)
+
+            # Always add the assistant's response
             self.conversations[phone].append({"role": "assistant", "content": clean_response})
+            print(f"   Conversation history updated (added {len(self.conversations[phone])} messages)", flush=True)
 
             # Keep only last 20 messages
             if len(self.conversations[phone]) > 20:

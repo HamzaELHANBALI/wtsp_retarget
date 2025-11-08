@@ -919,6 +919,16 @@ with tab1:
 
                                 # Automatically add to monitoring (no checkbox needed)
                                 auto_add_to_monitoring(formatted_phone)
+
+                                # Initialize message tracking immediately after sending
+                                # This marks all existing messages as "seen" so only NEW replies are detected
+                                if st.session_state.bot:
+                                    print(f"📋 Initializing tracking for {formatted_phone} after sending test message")
+                                    st.session_state.bot.initialize_message_tracking(formatted_phone)
+                                    if 'initialized_contacts' not in st.session_state:
+                                        st.session_state.initialized_contacts = set()
+                                    st.session_state.initialized_contacts.add(formatted_phone)
+
                                 st.success(f"🤖 Automatically added {formatted_phone} to AI monitoring!")
                                 st.info("💡 Go to 'AI Auto-Responder' tab to check for responses")
                             else:
@@ -1196,6 +1206,16 @@ with tab1:
                                 sent_count += 1
                                 # Automatically add to monitoring
                                 auto_add_to_monitoring(contact['phone_formatted'])
+
+                                # Initialize message tracking immediately after sending
+                                # This marks all existing messages as "seen" so only NEW replies are detected
+                                if st.session_state.bot:
+                                    print(f"📋 Initializing tracking for {contact['phone_formatted']} after sending message")
+                                    st.session_state.bot.initialize_message_tracking(contact['phone_formatted'])
+                                    if 'initialized_contacts' not in st.session_state:
+                                        st.session_state.initialized_contacts = set()
+                                    st.session_state.initialized_contacts.add(contact['phone_formatted'])
+
                                 with results_container:
                                     st.success(f"✅ Sent to {contact['name']} ({contact['phone_formatted']})")
                             else:
