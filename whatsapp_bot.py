@@ -544,38 +544,8 @@ Keep responses concise and helpful."""
             else:
                 print(f"🖼️ Sending image")
 
-            # STEP 1: Type caption text FIRST (before attaching media)
-            # This way it automatically becomes the caption when media is attached
-            if caption:
-                print(f"📝 Typing caption with line breaks preserved...")
-                try:
-                    import pyperclip
-                    import platform
-
-                    input_box = self.wait.until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, "[contenteditable='true'][data-tab='10']"))
-                    )
-
-                    # Focus input box
-                    input_box.click()
-                    time.sleep(0.3)
-
-                    # Use system clipboard to preserve line breaks
-                    pyperclip.copy(caption)
-                    print(f"📋 Caption copied to clipboard ({len(caption)} chars, {caption.count(chr(10))} line breaks)")
-
-                    # Paste with Ctrl+V or Cmd+V
-                    if platform.system() == 'Darwin':  # macOS
-                        input_box.send_keys(Keys.COMMAND, 'v')
-                    else:  # Windows/Linux
-                        input_box.send_keys(Keys.CONTROL, 'v')
-
-                    print(f"✅ Caption pasted: {caption[:50]}...")
-                    time.sleep(1)
-                except Exception as e:
-                    print(f"⚠️  Could not paste caption: {e}")
-
-            # STEP 2: Click attachment button - try multiple selectors
+            # STEP 1: Click attachment button - try multiple selectors
+            # NOTE: We'll add caption AFTER media preview opens
             print("📎 Opening attachment menu...")
 
             attach_selectors = [
@@ -872,29 +842,58 @@ Keep responses concise and helpful."""
                 print(f"⚠️  Error sending file path: {e}")
                 raise
 
-            # STEP 4: Wait for upload to complete
-            # Caption should already be there from Step 1
-            print("⏳ Waiting for video to finish uploading...")
-            time.sleep(4)
-
-            # Verify caption is still there
+            # STEP 4: Add caption in the media preview (NOW, after preview opened)
             if caption:
+                print(f"📝 Adding caption to media preview with line breaks preserved...")
                 try:
-                    caption_present = self.driver.execute_script("""
+                    import pyperclip
+                    import platform
+
+                    # Wait for upload to start
+                    time.sleep(2)
+
+                    # Find the caption input box in the media preview
+                    caption_box = self.wait.until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "[contenteditable='true']"))
+                    )
+
+                    # Focus the caption box
+                    caption_box.click()
+                    time.sleep(0.3)
+
+                    # Use system clipboard to preserve line breaks
+                    pyperclip.copy(caption)
+                    print(f"📋 Caption copied to clipboard ({len(caption)} chars, {caption.count(chr(10))} line breaks)")
+
+                    # Paste with Ctrl+V or Cmd+V
+                    if platform.system() == 'Darwin':  # macOS
+                        caption_box.send_keys(Keys.COMMAND, 'v')
+                    else:  # Windows/Linux
+                        caption_box.send_keys(Keys.CONTROL, 'v')
+
+                    print(f"✅ Caption pasted into preview: {caption[:50]}...")
+                    time.sleep(1)
+
+                    # Verify caption was pasted
+                    caption_check = self.driver.execute_script(
+                        """
                         const captionBox = document.querySelector('[contenteditable="true"]');
                         if (captionBox) {
-                            const text = captionBox.textContent || captionBox.innerText || '';
-                            return text.length > 0;
+                            return captionBox.textContent || captionBox.innerText || '';
                         }
-                        return false;
-                    """)
+                        return '';
+                        """
+                    )
+                    print(f"✓ Caption in preview: {len(caption_check)} chars")
 
-                    if caption_present:
-                        print(f"✅ Caption is present in preview")
-                    else:
-                        print(f"⚠️  Caption may not be visible, will verify after send...")
-                except:
-                    pass
+                except Exception as e:
+                    print(f"⚠️  Could not paste caption in preview: {e}")
+                    import traceback
+                    traceback.print_exc()
+
+            # Wait for upload to complete
+            print("⏳ Waiting for video to finish uploading...")
+            time.sleep(4)
 
             # STEP 5: Click send button - try multiple methods
             print("📤 Looking for send button...")
