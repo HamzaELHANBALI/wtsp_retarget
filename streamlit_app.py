@@ -107,16 +107,28 @@ def check_and_respond_to_messages():
             new_msg = st.session_state.bot.get_new_messages(phone)
 
             if new_msg:
-                print(f"✨ NEW MESSAGE DETECTED!")
-                print(f"   From: {phone}")
-                print(f"   Message: {new_msg[:100]}...")
+                import sys
+                print(f"✨ NEW MESSAGE DETECTED!", flush=True)
+                print(f"   From: {phone}", flush=True)
+                print(f"   Message: {new_msg[:100]}...", flush=True)
+                sys.stdout.flush()
 
-                # Generate AI response
-                print(f"📝 Generating AI response...")
-                ai_response = st.session_state.bot.generate_ai_response(new_msg, phone)
+                # Check if bot has AI enabled
+                if not st.session_state.bot.ai_enabled:
+                    print(f"⚠️  AI NOT ENABLED on bot instance!", flush=True)
+                    sys.stdout.flush()
+                    ai_response = "Thank you for your message. We'll get back to you soon."
+                else:
+                    # Generate AI response
+                    print(f"📝 Generating AI response (AI is enabled)...", flush=True)
+                    sys.stdout.flush()
+                    ai_response = st.session_state.bot.generate_ai_response(new_msg, phone)
+                    print(f"✅ AI response received: {ai_response[:50]}...", flush=True)
+                    sys.stdout.flush()
 
                 # Send response
-                print(f"📤 Sending AI response...")
+                print(f"📤 Sending AI response...", flush=True)
+                sys.stdout.flush()
                 send_success = st.session_state.bot.send_message(phone, ai_response)
 
                 if send_success:
@@ -142,9 +154,13 @@ def check_and_respond_to_messages():
                 })
 
         except Exception as e:
-            print(f"❌ ERROR checking/responding to {phone}: {e}")
+            import sys
             import traceback
+            print(f"\n❌ ERROR checking/responding to {phone}: {e}", flush=True)
+            print(f"Error type: {type(e).__name__}", flush=True)
+            sys.stdout.flush()
             traceback.print_exc()
+            sys.stdout.flush()
             responses.append({
                 'phone': phone,
                 'error': str(e),
