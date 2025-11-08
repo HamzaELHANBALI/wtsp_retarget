@@ -1453,6 +1453,12 @@ Keep responses concise and helpful."""
                 print(f"   Clearing previous conversation history for {phone}")
                 self.conversations[phone] = []
 
+        # Initialize message tracking to mark all existing messages as "seen"
+        # This prevents responding to old messages when monitoring starts
+        print(f"\n📋 Initializing message tracking...")
+        for phone in self.monitored_contacts:
+            self.initialize_message_tracking(phone)
+
         print(f"\n🤖 AI Monitoring Started")
         print(f"   Monitoring {len(self.monitored_contacts)} contact(s)")
         print(f"   Check interval: {check_interval}s")
