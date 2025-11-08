@@ -1461,10 +1461,19 @@ Keep responses concise and helpful."""
             phone = self._format_phone(phone)
             print(f"🔄 Initializing message tracking for {phone}...")
 
-            # Open chat
-            url = f"https://web.whatsapp.com/send?phone={phone.replace('+', '')}"
-            self.driver.get(url)
-            time.sleep(5)
+            # Check if we're already in the correct chat
+            current_url = self.driver.current_url
+            phone_number = phone.replace('+', '')
+
+            # Only navigate if we're not already in this chat
+            if phone_number not in current_url:
+                print(f"   Navigating to chat...")
+                url = f"https://web.whatsapp.com/send?phone={phone_number}"
+                self.driver.get(url)
+                time.sleep(5)  # Wait for chat to load
+            else:
+                print(f"   Already in chat, skipping navigation")
+                time.sleep(1)  # Brief wait to ensure any pending messages are loaded
 
             # Use get_new_messages to populate seen_message_ids without adding to context
             # This will mark all current messages as "seen" but NOT add them to conversation history

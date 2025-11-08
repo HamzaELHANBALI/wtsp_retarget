@@ -920,7 +920,22 @@ with tab1:
                             # Parse message with variables
                             final_message = parse_message_template(test_message, test_name, formatted_phone, "")
 
-                            # Send message
+                            # Initialize message tracking BEFORE sending
+                            # This marks all existing messages as "seen" so only replies AFTER we send are detected
+                            if st.session_state.bot:
+                                print(f"📋 Initializing tracking for {formatted_phone} before sending test message")
+                                # First, open the chat
+                                url = f"https://web.whatsapp.com/send?phone={formatted_phone.replace('+', '')}"
+                                st.session_state.bot.driver.get(url)
+                                time.sleep(3)  # Wait for chat to load
+
+                                # Mark existing messages as seen
+                                st.session_state.bot.initialize_message_tracking(formatted_phone)
+                                if 'initialized_contacts' not in st.session_state:
+                                    st.session_state.initialized_contacts = set()
+                                st.session_state.initialized_contacts.add(formatted_phone)
+
+                            # Send message (we're already in the chat)
                             success = st.session_state.bot.send_message(
                                 phone=formatted_phone,
                                 message=final_message,
@@ -934,15 +949,6 @@ with tab1:
 
                                 # Automatically add to monitoring (no checkbox needed)
                                 auto_add_to_monitoring(formatted_phone)
-
-                                # Initialize message tracking immediately after sending
-                                # This marks all existing messages as "seen" so only NEW replies are detected
-                                if st.session_state.bot:
-                                    print(f"📋 Initializing tracking for {formatted_phone} after sending test message")
-                                    st.session_state.bot.initialize_message_tracking(formatted_phone)
-                                    if 'initialized_contacts' not in st.session_state:
-                                        st.session_state.initialized_contacts = set()
-                                    st.session_state.initialized_contacts.add(formatted_phone)
 
                                 st.success(f"🤖 Automatically added {formatted_phone} to AI monitoring!")
                                 st.info("💡 Go to 'AI Auto-Responder' tab to check for responses")
@@ -1210,7 +1216,22 @@ with tab1:
                                 contact.get('custom_message', '')
                             )
 
-                            # Send message
+                            # Initialize message tracking BEFORE sending
+                            # This marks all existing messages as "seen" so only replies AFTER we send are detected
+                            if st.session_state.bot:
+                                print(f"📋 Initializing tracking for {contact['phone_formatted']} before sending")
+                                # First, open the chat (this will navigate to it)
+                                url = f"https://web.whatsapp.com/send?phone={contact['phone_formatted'].replace('+', '')}"
+                                st.session_state.bot.driver.get(url)
+                                time.sleep(3)  # Wait for chat to load
+
+                                # Mark existing messages as seen
+                                st.session_state.bot.initialize_message_tracking(contact['phone_formatted'])
+                                if 'initialized_contacts' not in st.session_state:
+                                    st.session_state.initialized_contacts = set()
+                                st.session_state.initialized_contacts.add(contact['phone_formatted'])
+
+                            # Send message (we're already in the chat)
                             success = st.session_state.bot.send_message(
                                 phone=contact['phone_formatted'],
                                 message=message,
@@ -1221,15 +1242,6 @@ with tab1:
                                 sent_count += 1
                                 # Automatically add to monitoring
                                 auto_add_to_monitoring(contact['phone_formatted'])
-
-                                # Initialize message tracking immediately after sending
-                                # This marks all existing messages as "seen" so only NEW replies are detected
-                                if st.session_state.bot:
-                                    print(f"📋 Initializing tracking for {contact['phone_formatted']} after sending message")
-                                    st.session_state.bot.initialize_message_tracking(contact['phone_formatted'])
-                                    if 'initialized_contacts' not in st.session_state:
-                                        st.session_state.initialized_contacts = set()
-                                    st.session_state.initialized_contacts.add(contact['phone_formatted'])
 
                                 with results_container:
                                     st.success(f"✅ Sent to {contact['name']} ({contact['phone_formatted']})")
