@@ -544,8 +544,51 @@ Keep responses concise and helpful."""
             else:
                 print(f"🖼️ Sending image")
 
-            # STEP 1: Click attachment button - try multiple selectors
-            # NOTE: We'll add caption AFTER media preview opens
+            # STEP 1: Add caption FIRST (before attaching media)
+            # When media is attached, WhatsApp will use this text as the caption
+            if caption:
+                print(f"📝 Typing caption first (will become media caption)...")
+                try:
+                    import pyperclip
+                    import platform
+
+                    input_box = self.wait.until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "[contenteditable='true'][data-tab='10']"))
+                    )
+
+                    # Focus input box
+                    input_box.click()
+                    time.sleep(0.3)
+
+                    # Use system clipboard to preserve line breaks
+                    pyperclip.copy(caption)
+                    print(f"📋 Caption copied to clipboard ({len(caption)} chars, {caption.count(chr(10))} line breaks)")
+
+                    # Paste with Ctrl+V or Cmd+V
+                    if platform.system() == 'Darwin':  # macOS
+                        input_box.send_keys(Keys.COMMAND, 'v')
+                    else:  # Windows/Linux
+                        input_box.send_keys(Keys.CONTROL, 'v')
+
+                    print(f"✅ Caption pasted in chat input: {caption[:50]}...")
+                    time.sleep(1)
+
+                    # Verify caption was pasted
+                    caption_check = self.driver.execute_script(
+                        """
+                        const el = arguments[0];
+                        return el.textContent || el.innerText || '';
+                        """,
+                        input_box
+                    )
+                    print(f"✓ Caption in input box: {len(caption_check)} chars")
+
+                except Exception as e:
+                    print(f"⚠️  Could not paste caption: {e}")
+                    import traceback
+                    traceback.print_exc()
+
+            # STEP 2: Click attachment button - try multiple selectors
             print("📎 Opening attachment menu...")
 
             attach_selectors = [
@@ -842,100 +885,8 @@ Keep responses concise and helpful."""
                 print(f"⚠️  Error sending file path: {e}")
                 raise
 
-            # STEP 4: Add caption in the media preview (NOW, after preview opened)
-            if caption:
-                print(f"📝 Adding caption to media preview with line breaks preserved...")
-                try:
-                    import pyperclip
-                    import platform
-
-                    # Wait for preview to fully load
-                    time.sleep(3)
-
-                    # Use JavaScript to find and focus the caption box in the media PREVIEW
-                    # The preview is a modal/dialog that overlays the main chat
-                    caption_ready = self.driver.execute_script("""
-                        // Find the media preview/viewer dialog
-                        const mediaViewer = document.querySelector('[data-animate-media-viewer]') ||
-                                          document.querySelector('[data-testid="media-viewer"]') ||
-                                          document.querySelector('div[role="dialog"]');
-
-                        if (!mediaViewer) {
-                            console.log('Media viewer not found');
-                            return false;
-                        }
-
-                        // Find contenteditable inside the media viewer
-                        const captionBox = mediaViewer.querySelector('[contenteditable="true"]');
-
-                        if (!captionBox) {
-                            console.log('Caption box not found in media viewer');
-                            return false;
-                        }
-
-                        // Focus and click using JavaScript (bypasses interception)
-                        captionBox.focus();
-                        captionBox.click();
-
-                        console.log('Caption box focused successfully');
-                        return true;
-                    """)
-
-                    if not caption_ready:
-                        raise Exception("Could not find or focus caption box in media preview")
-
-                    print("✓ Caption box focused in media preview")
-                    time.sleep(0.5)
-
-                    # Get the caption box element for pasting
-                    caption_box = self.driver.execute_script("""
-                        const mediaViewer = document.querySelector('[data-animate-media-viewer]') ||
-                                          document.querySelector('[data-testid="media-viewer"]') ||
-                                          document.querySelector('div[role="dialog"]');
-                        return mediaViewer ? mediaViewer.querySelector('[contenteditable="true"]') : null;
-                    """)
-
-                    if not caption_box:
-                        raise Exception("Could not get caption box element")
-
-                    # Use system clipboard to preserve line breaks
-                    pyperclip.copy(caption)
-                    print(f"📋 Caption copied to clipboard ({len(caption)} chars, {caption.count(chr(10))} line breaks)")
-
-                    # Paste with Ctrl+V or Cmd+V
-                    if platform.system() == 'Darwin':  # macOS
-                        caption_box.send_keys(Keys.COMMAND, 'v')
-                    else:  # Windows/Linux
-                        caption_box.send_keys(Keys.CONTROL, 'v')
-
-                    print(f"✅ Caption pasted: {caption[:50]}...")
-                    time.sleep(1)
-
-                    # Verify caption was pasted
-                    caption_check = self.driver.execute_script("""
-                        const mediaViewer = document.querySelector('[data-animate-media-viewer]') ||
-                                          document.querySelector('[data-testid="media-viewer"]') ||
-                                          document.querySelector('div[role="dialog"]');
-                        if (!mediaViewer) return '';
-
-                        const captionBox = mediaViewer.querySelector('[contenteditable="true"]');
-                        if (!captionBox) return '';
-
-                        return captionBox.textContent || captionBox.innerText || '';
-                    """)
-
-                    if len(caption_check) > 0:
-                        print(f"✓ Caption verified in preview: {len(caption_check)} chars")
-                    else:
-                        print(f"⚠️  WARNING: Caption may not have been pasted - preview shows 0 chars")
-
-                except Exception as e:
-                    print(f"❌ ERROR pasting caption: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    print("⚠️  Video will be sent WITHOUT caption")
-
-            # Wait for upload to complete
+            # STEP 4: Wait for upload to complete
+            # Caption should already be there from Step 1
             print("⏳ Waiting for video to finish uploading...")
             time.sleep(4)
 
