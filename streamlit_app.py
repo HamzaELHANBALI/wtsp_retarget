@@ -853,69 +853,80 @@ with tab1:
                     status_text = st.empty()
                     results_container = st.container()
 
+                    # Set bulk sending flag to pause background monitoring
+                    if st.session_state.bot:
+                        st.session_state.bot.bulk_sending_active = True
+                        print("🔄 Bulk sending started - background monitoring paused")
+
                     sent_count = 0
                     failed_count = 0
 
-                    for idx, contact in contacts_to_send.iterrows():
-                        try:
-                            # Update progress
-                            progress = (sent_count + failed_count + 1) / len(contacts_to_send)
-                            progress_bar.progress(progress)
-                            status_text.text(f"Sending to {contact['name']} ({contact['phone_formatted']})...")
+                    try:
+                        for idx, contact in contacts_to_send.iterrows():
+                            try:
+                                # Update progress
+                                progress = (sent_count + failed_count + 1) / len(contacts_to_send)
+                                progress_bar.progress(progress)
+                                status_text.text(f"Sending to {contact['name']} ({contact['phone_formatted']})...")
 
-                            # Parse message
-                            message = parse_message_template(
-                                message_template,
-                                contact['name'],
-                                contact['phone_formatted'],
-                                contact.get('custom_message', '')
-                            )
+                                # Parse message
+                                message = parse_message_template(
+                                    message_template,
+                                    contact['name'],
+                                    contact['phone_formatted'],
+                                    contact.get('custom_message', '')
+                                )
 
-                            # Send message
-                            success = st.session_state.bot.send_message(
-                                phone=contact['phone_formatted'],
-                                message=message,
-                                media_path=str(media_path) if media_path else None
-                            )
+                                # Send message
+                                success = st.session_state.bot.send_message(
+                                    phone=contact['phone_formatted'],
+                                    message=message,
+                                    media_path=str(media_path) if media_path else None
+                                )
 
-                            if success:
-                                sent_count += 1
-                                # Automatically add to monitoring
-                                auto_add_to_monitoring(contact['phone_formatted'])
-                                with results_container:
-                                    st.success(f"✅ Sent to {contact['name']} ({contact['phone_formatted']})")
-                            else:
+                                if success:
+                                    sent_count += 1
+                                    # Automatically add to monitoring
+                                    auto_add_to_monitoring(contact['phone_formatted'])
+                                    with results_container:
+                                        st.success(f"✅ Sent to {contact['name']} ({contact['phone_formatted']})")
+                                else:
+                                    failed_count += 1
+                                    with results_container:
+                                        st.error(f"❌ Failed to send to {contact['name']} ({contact['phone_formatted']})")
+
+                                # Delay between messages
+                                if sent_count + failed_count < len(contacts_to_send):
+                                    time.sleep(message_delay)
+
+                            except Exception as e:
                                 failed_count += 1
                                 with results_container:
-                                    st.error(f"❌ Failed to send to {contact['name']} ({contact['phone_formatted']})")
+                                    st.error(f"❌ Error sending to {contact['name']}: {str(e)}")
 
-                            # Delay between messages
-                            if sent_count + failed_count < len(contacts_to_send):
-                                time.sleep(message_delay)
+                        # Final summary
+                        progress_bar.progress(1.0)
+                        status_text.text("✅ Bulk messaging complete!")
 
-                        except Exception as e:
-                            failed_count += 1
-                            with results_container:
-                                st.error(f"❌ Error sending to {contact['name']}: {str(e)}")
+                        st.divider()
+                        col_a, col_b, col_c = st.columns(3)
+                        with col_a:
+                            st.metric("Total Sent", sent_count)
+                        with col_b:
+                            st.metric("Failed", failed_count)
+                        with col_c:
+                            success_rate = (sent_count / len(contacts_to_send) * 100) if len(contacts_to_send) > 0 else 0
+                            st.metric("Success Rate", f"{success_rate:.1f}%")
 
-                    # Final summary
-                    progress_bar.progress(1.0)
-                    status_text.text("✅ Bulk messaging complete!")
-
-                    st.divider()
-                    col_a, col_b, col_c = st.columns(3)
-                    with col_a:
-                        st.metric("Total Sent", sent_count)
-                    with col_b:
-                        st.metric("Failed", failed_count)
-                    with col_c:
-                        success_rate = (sent_count / len(contacts_to_send) * 100) if len(contacts_to_send) > 0 else 0
-                        st.metric("Success Rate", f"{success_rate:.1f}%")
-
-                    # Update session stats
-                    st.session_state.message_stats['sent'] += sent_count
-                    st.session_state.message_stats['failed'] += failed_count
-                    st.session_state.message_stats['total'] += len(contacts_to_send)
+                        # Update session stats
+                        st.session_state.message_stats['sent'] += sent_count
+                        st.session_state.message_stats['failed'] += failed_count
+                        st.session_state.message_stats['total'] += len(contacts_to_send)
+                    finally:
+                        # Always reset bulk sending flag, even if there was an error
+                        if st.session_state.bot:
+                            st.session_state.bot.bulk_sending_active = False
+                            print("✅ Bulk sending finished - background monitoring resumed")
             else:
                 st.info("📋 Upload a CSV file to get started")
 

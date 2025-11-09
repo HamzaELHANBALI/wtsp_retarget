@@ -180,6 +180,11 @@ Keep responses concise and helpful."""
         self.monitoring_stopped_contacts: set = set()  # Contacts that have monitoring stopped
         self.monitoring_check_interval = 5  # Check every 5 seconds
         self.monitoring_lock = threading.Lock()  # Lock for thread-safe operations
+        
+        # Browser synchronization (prevent race conditions when switching chats)
+        self.browser_lock = threading.Lock()  # Lock for browser operations (driver.get, etc.)
+        self.current_chat_phone: Optional[str] = None  # Track which chat is currently open
+        self.bulk_sending_active = False  # Flag to pause background monitoring during bulk sending
 
         # Statistics
         self.messages_sent = 0
@@ -534,6 +539,39 @@ Keep responses concise and helpful."""
         except Exception as e:
             print(f"⚠️  Failed to update lead status: {e}")
 
+    def _open_chat_safely(self, phone: str, force: bool = False) -> bool:
+        """
+        Safely open a chat with thread-safe locking and current chat tracking.
+        
+        Args:
+            phone: Phone number to open chat for
+            force: If True, open even if already in this chat (for refresh)
+            
+        Returns:
+            True if chat opened successfully, False otherwise
+        """
+        phone = self._format_phone(phone)
+        
+        with self.browser_lock:
+            # Check if we're already in this chat
+            if not force and self.current_chat_phone == phone:
+                # Already in the correct chat, no need to switch
+                return True
+            
+            try:
+                # Open chat
+                url = f"https://web.whatsapp.com/send?phone={phone.replace('+', '')}"
+                self.driver.get(url)
+                self.current_chat_phone = phone
+                
+                # Wait for chat to load
+                time.sleep(random.uniform(3, 5))
+                return True
+            except Exception as e:
+                print(f"⚠️  Error opening chat for {phone}: {e}")
+                self.current_chat_phone = None
+                return False
+
     def send_message(
         self,
         phone: str,
@@ -555,12 +593,11 @@ Keep responses concise and helpful."""
             phone = self._format_phone(phone)
             print(f"\n📤 Sending to {phone}...")
 
-            # Open chat
-            url = f"https://web.whatsapp.com/send?phone={phone.replace('+', '')}"
-            self.driver.get(url)
-
-            # Wait for chat to load
-            time.sleep(random.uniform(3, 5))
+            # Open chat safely (with lock to prevent race conditions)
+            if not self._open_chat_safely(phone):
+                print(f"❌ Failed to open chat for {phone}")
+                self.messages_failed += 1
+                return False
 
             # Check if number is valid (chat loaded)
             try:
@@ -576,9 +613,10 @@ Keep responses concise and helpful."""
             is_first_contact = phone not in self.monitored_contacts
             
             # If this is the first contact, start monitoring BEFORE sending (clears history and marks existing messages as seen)
+            # But skip opening the chat since we're already in it
             if is_first_contact:
                 self.monitored_contacts.append(phone)
-                self.start_monitoring_contact(phone)
+                self.start_monitoring_contact(phone, skip_chat_open=True)
             
             # Send media if provided
             if media_path and os.path.exists(media_path):
@@ -1437,12 +1475,13 @@ Keep responses concise and helpful."""
             traceback.print_exc()
             return False
 
-    def get_new_messages(self, phone: str) -> Optional[str]:
+    def get_new_messages(self, phone: str, skip_chat_open: bool = False) -> Optional[str]:
         """
         Check for new messages from a contact
 
         Args:
             phone: Phone number to check
+            skip_chat_open: If True, skip opening the chat (assumes we're already in it)
 
         Returns:
             New message text if found, None otherwise
@@ -1458,10 +1497,13 @@ Keep responses concise and helpful."""
             except:
                 pass  # Not critical for message checking
 
-            # Open chat
-            url = f"https://web.whatsapp.com/send?phone={phone.replace('+', '')}"
-            self.driver.get(url)
-            time.sleep(5)  # Increased wait time for chat to load
+            # Open chat safely (with lock to prevent race conditions)
+            if not skip_chat_open:
+                if not self._open_chat_safely(phone):
+                    print(f"⚠️  Could not open chat for {phone}")
+                    return None
+                time.sleep(2)  # Wait for chat to stabilize
+            # If skip_chat_open is True, we assume we're already in the correct chat
 
             # Check if chat loaded successfully - try multiple selectors
             chat_loaded = False
@@ -2111,13 +2153,14 @@ Keep responses concise and helpful."""
             sys.stdout.flush()
             return "Thank you for your message. We'll get back to you soon."
 
-    def start_monitoring_contact(self, phone: str):
+    def start_monitoring_contact(self, phone: str, skip_chat_open: bool = False):
         """
         Start monitoring a contact - clears conversation history and marks existing messages as seen.
         Call this when you first add a contact to monitoring.
 
         Args:
             phone: Phone number to start monitoring
+            skip_chat_open: If True, skip opening the chat (assumes we're already in it)
         """
         try:
             phone = self._format_phone(phone)
@@ -2133,18 +2176,33 @@ Keep responses concise and helpful."""
                 self.conversations[phone] = []
 
             # Mark all existing messages as "seen" to avoid responding to old messages
-            try:
-                # Open chat
-                url = f"https://web.whatsapp.com/send?phone={phone.replace('+', '')}"
-                self.driver.get(url)
-                time.sleep(3)
-
-                # Use get_new_messages to populate seen_message_ids
-                # This will mark all current messages as "seen"
-                _ = self.get_new_messages(phone)
-                print(f"   {len(self.seen_message_ids.get(phone, set()))} existing messages marked as seen")
-            except Exception as e:
-                print(f"   ⚠️  Could not mark existing messages as seen: {e}")
+            if not skip_chat_open:
+                try:
+                    # Open chat safely (only if not already in it)
+                    if not self._open_chat_safely(phone):
+                        print(f"   ⚠️  Could not open chat for {phone}")
+                    else:
+                        time.sleep(2)  # Wait for chat to stabilize
+                        # Use get_new_messages to populate seen_message_ids
+                        # This will mark all current messages as "seen"
+                        _ = self.get_new_messages(phone, skip_chat_open=True)
+                        print(f"   {len(self.seen_message_ids.get(phone, set()))} existing messages marked as seen")
+                except Exception as e:
+                    print(f"   ⚠️  Could not mark existing messages as seen: {e}")
+            else:
+                # We're already in the chat, just mark existing messages as seen
+                try:
+                    # Initialize seen_message_ids if needed
+                    if phone not in self.seen_message_ids:
+                        self.seen_message_ids[phone] = set()
+                    if phone not in self.seen_message_texts:
+                        self.seen_message_texts[phone] = set()
+                    
+                    # Mark all currently visible messages as seen
+                    _ = self.get_new_messages(phone, skip_chat_open=True)
+                    print(f"   {len(self.seen_message_ids.get(phone, set()))} existing messages marked as seen")
+                except Exception as e:
+                    print(f"   ⚠️  Could not mark existing messages as seen: {e}")
 
             print(f"✅ Monitoring started for {phone} - conversation history cleared")
 
@@ -2157,6 +2215,11 @@ Keep responses concise and helpful."""
         
         while self.auto_monitoring_active:
             try:
+                # Skip monitoring if bulk sending is active (to avoid race conditions)
+                if self.bulk_sending_active:
+                    time.sleep(1)  # Short sleep, then check again
+                    continue
+                
                 # Get list of contacts to monitor (thread-safe)
                 with self.monitoring_lock:
                     # Only monitor contacts that are not stopped
@@ -2175,8 +2238,12 @@ Keep responses concise and helpful."""
                     if not self.auto_monitoring_active:
                         break
                     
+                    # Double-check bulk_sending_active before each contact check
+                    if self.bulk_sending_active:
+                        break  # Exit loop if bulk sending started
+                    
                     try:
-                        # Check for new messages
+                        # Check for new messages (will open chat safely with lock)
                         new_msg = self.get_new_messages(phone)
                         
                         if new_msg:
@@ -2289,14 +2356,14 @@ Keep responses concise and helpful."""
             phone = self._format_phone(phone)
             print(f"🔄 Initializing message tracking for {phone}...")
 
-            # Open chat
-            url = f"https://web.whatsapp.com/send?phone={phone.replace('+', '')}"
-            self.driver.get(url)
-            time.sleep(5)
-
+            # Open chat safely (with lock to prevent race conditions)
+            if not self._open_chat_safely(phone):
+                print(f"⚠️  Could not open chat for {phone}")
+                return
+            
             # Use get_new_messages to populate seen_message_ids without returning anything
             # This will mark all current messages as "seen"
-            _ = self.get_new_messages(phone)
+            _ = self.get_new_messages(phone, skip_chat_open=True)
 
             print(f"✅ Message tracking initialized for {phone}")
             print(f"   {len(self.seen_message_ids.get(phone, set()))} messages marked as seen")
