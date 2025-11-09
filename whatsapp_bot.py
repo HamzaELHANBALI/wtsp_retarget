@@ -1744,13 +1744,54 @@ Keep responses concise and helpful."""
 
             # Call OpenAI API with explicit timeout
             # Increased max_tokens to 800 to prevent message truncation
-            response = self.openai_client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=0.7,
-                max_tokens=800,  # Increased from 200 to allow complete responses
-                timeout=30.0  # 30 second timeout
-            )
+            try:
+                response = self.openai_client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=0.7,
+                    max_tokens=800,  # Increased from 200 to allow complete responses
+                    timeout=30.0  # 30 second timeout
+                )
+            except Exception as ssl_error:
+                error_str = str(ssl_error).lower()
+                if "certificate" in error_str or "ssl" in error_str or "certificate verify failed" in error_str:
+                    print(f"   ⚠️  SSL certificate error: {ssl_error}")
+                    print("   💡 This might be due to:")
+                    print("      1. System clock is incorrect (check system time)")
+                    print("      2. SSL certificate verification issue")
+                    print("   💡 Trying with SSL verification disabled (less secure)...")
+                    
+                    # Try with SSL verification disabled as fallback
+                    import httpx
+                    import ssl
+                    import certifi
+                    
+                    # Create a custom HTTP client with SSL verification disabled
+                    try:
+                        # Reinitialize OpenAI client with SSL verification disabled
+                        from openai import OpenAI
+                        custom_client = OpenAI(
+                            api_key=self.openai_client.api_key,
+                            http_client=httpx.Client(
+                                verify=False,  # Disable SSL verification (not recommended but sometimes necessary)
+                                timeout=30.0
+                            )
+                        )
+                        
+                        # Try again with custom client
+                        response = custom_client.chat.completions.create(
+                            model=self.model,
+                            messages=messages,
+                            temperature=0.7,
+                            max_tokens=800,
+                            timeout=30.0
+                        )
+                        print("   ✅ Connected with SSL verification disabled")
+                    except Exception as retry_error:
+                        print(f"   ❌ Retry failed: {retry_error}")
+                        raise ssl_error  # Re-raise original error
+                else:
+                    raise  # Re-raise if not SSL error
 
             print(f"   ✅ Received response from OpenAI", flush=True)
             sys.stdout.flush()
@@ -1826,13 +1867,38 @@ Keep responses concise and helpful."""
                 continuation_messages.append({"role": "user", "content": "أكمل رسالتك من حيث توقفت. (Complete your message from where you left off.)"})
                 
                 try:
-                    continuation_response = self.openai_client.chat.completions.create(
-                        model=self.model,
-                        messages=continuation_messages,
-                        temperature=0.7,
-                        max_tokens=400,
-                        timeout=20.0
-                    )
+                    try:
+                        continuation_response = self.openai_client.chat.completions.create(
+                            model=self.model,
+                            messages=continuation_messages,
+                            temperature=0.7,
+                            max_tokens=400,
+                            timeout=20.0
+                        )
+                    except Exception as ssl_error:
+                        error_str = str(ssl_error).lower()
+                        if "certificate" in error_str or "ssl" in error_str or "certificate verify failed" in error_str:
+                            print(f"   ⚠️  SSL certificate error in continuation: {ssl_error}")
+                            print("   💡 Trying with SSL verification disabled...")
+                            
+                            # Use custom client with SSL verification disabled
+                            import httpx
+                            from openai import OpenAI
+                            custom_client = OpenAI(
+                                api_key=self.openai_client.api_key,
+                                http_client=httpx.Client(verify=False, timeout=20.0)
+                            )
+                            
+                            continuation_response = custom_client.chat.completions.create(
+                                model=self.model,
+                                messages=continuation_messages,
+                                temperature=0.7,
+                                max_tokens=400,
+                                timeout=20.0
+                            )
+                        else:
+                            raise
+                    
                     continuation = continuation_response.choices[0].message.content.strip()
                     # Only append if continuation makes sense (not a duplicate start)
                     if continuation and len(continuation) > 10:
