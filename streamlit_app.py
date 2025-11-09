@@ -388,6 +388,58 @@ Always have it home. 90% choose 3-pack - smarter 💡 Reconsider?"
             value=40,
             help="Recommended: 40-50 messages"
         )
+    
+    # Follow-up (Relance) Settings
+    with st.expander("📬 Follow-up Messages (Relance)"):
+        st.info("Automatically send follow-up messages to customers who didn't respond after a set time.")
+        
+        followup_enabled = st.checkbox(
+            "Enable Follow-up Messages",
+            value=True,
+            help="Automatically send follow-up messages to customers who didn't respond"
+        )
+        
+        if followup_enabled:
+            followup_delay_minutes = st.slider(
+                "Follow-up Delay (minutes)",
+                min_value=15,
+                max_value=1440,  # 24 hours
+                value=60,
+                step=15,
+                help="How long to wait before sending a follow-up (e.g., 30 min, 60 min, 2 hours)"
+            )
+            
+            # Convert to hours for display
+            followup_delay_hours = followup_delay_minutes / 60
+            if followup_delay_hours >= 1:
+                st.caption(f"⏱️ Follow-up will be sent after {followup_delay_hours:.1f} hour(s)")
+            else:
+                st.caption(f"⏱️ Follow-up will be sent after {followup_delay_minutes} minute(s)")
+            
+            # Custom follow-up message
+            st.markdown("**Custom Follow-up Message (Optional)**")
+            custom_followup = st.text_area(
+                "Follow-up Message Template",
+                value="",
+                height=100,
+                placeholder="Leave empty to use default message...",
+                help="Custom message to send as follow-up. Leave empty to use default."
+            )
+            
+            if custom_followup:
+                st.caption("✅ Custom follow-up message will be used")
+            else:
+                st.caption("ℹ️ Default follow-up message will be used")
+        else:
+            followup_delay_minutes = 60  # Default value
+            custom_followup = ""
+            st.caption("❌ Follow-up messages are disabled")
+        
+        # Update bot settings if bot exists
+        if st.session_state.bot:
+            st.session_state.bot.followup_enabled = followup_enabled
+            st.session_state.bot.followup_delay_minutes = followup_delay_minutes
+            st.session_state.bot.followup_message_template = custom_followup if custom_followup else None
 
     st.divider()
 

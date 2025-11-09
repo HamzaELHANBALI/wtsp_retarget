@@ -174,6 +174,14 @@ Keep responses concise and helpful."""
         self.seen_message_ids: Dict[str, set] = {}  # New ID-based tracking
         self.monitored_contacts: List[str] = []
         
+        # Follow-up (relance) tracking
+        self.last_contact_time: Dict[str, datetime] = {}  # When we last contacted each customer
+        self.customer_responded: Dict[str, bool] = {}  # Whether customer responded after our last contact
+        self.followup_sent: Dict[str, bool] = {}  # Whether we already sent a follow-up
+        self.followup_enabled = True  # Enable/disable follow-up feature
+        self.followup_delay_minutes = 60  # Default: 60 minutes (1 hour) before follow-up
+        self.followup_message_template = None  # Custom follow-up message (None = use default)
+        
         # Automatic monitoring
         self.auto_monitoring_active = False
         self.monitoring_thread: Optional[threading.Thread] = None
@@ -617,6 +625,10 @@ Keep responses concise and helpful."""
             if is_first_contact:
                 self.monitored_contacts.append(phone)
                 self.start_monitoring_contact(phone, skip_chat_open=True)
+                # Initialize follow-up tracking for this customer
+                self.last_contact_time[phone] = datetime.now()
+                self.customer_responded[phone] = False
+                self.followup_sent[phone] = False
             
             # Send media if provided
             if media_path and os.path.exists(media_path):
@@ -636,11 +648,23 @@ Keep responses concise and helpful."""
                         })
                         print(f"   Added offer message to conversation history for {phone}")
                         
+                        # Track contact time for follow-up (only set if not already set)
+                        if phone not in self.last_contact_time:
+                            self.last_contact_time[phone] = datetime.now()
+                            self.customer_responded[phone] = False
+                            self.followup_sent[phone] = False
+                        
                         # Automatically start background monitoring if not already running
                         if not self.auto_monitoring_active:
                             self.start_auto_monitoring()
                         else:
                             print(f"   ✅ Auto-monitoring is already active for this contact")
+                    else:
+                        # This is a follow-up or AI response - add to conversation history
+                        self.conversations[phone].append({
+                            "role": "assistant",
+                            "content": message if message else f"[Media: {Path(media_path).name}]"
+                        })
                     # If already in monitoring, this is an AI response - don't modify history
                     # (History is already managed in generate_ai_response)
                     
@@ -663,11 +687,23 @@ Keep responses concise and helpful."""
                         })
                         print(f"   Added offer message to conversation history for {phone}")
                         
+                        # Track contact time for follow-up (only set if not already set)
+                        if phone not in self.last_contact_time:
+                            self.last_contact_time[phone] = datetime.now()
+                            self.customer_responded[phone] = False
+                            self.followup_sent[phone] = False
+                        
                         # Automatically start background monitoring if not already running
                         if not self.auto_monitoring_active:
                             self.start_auto_monitoring()
                         else:
                             print(f"   ✅ Auto-monitoring is already active for this contact")
+                    else:
+                        # This is a follow-up or AI response - add to conversation history
+                        self.conversations[phone].append({
+                            "role": "assistant",
+                            "content": message if message else f"[Media: {Path(media_path).name}]"
+                        })
                     # If already in monitoring, this is an AI response - don't modify history
                     
                     return True
@@ -693,11 +729,23 @@ Keep responses concise and helpful."""
                 })
                 print(f"   Added offer message to conversation history for {phone}")
                 
+                # Track contact time for follow-up (only set if not already set)
+                if phone not in self.last_contact_time:
+                    self.last_contact_time[phone] = datetime.now()
+                    self.customer_responded[phone] = False
+                    self.followup_sent[phone] = False
+                
                 # Automatically start background monitoring if not already running
                 if not self.auto_monitoring_active:
                     self.start_auto_monitoring()
                 else:
                     print(f"   ✅ Auto-monitoring is already active for this contact")
+            else:
+                # This is a follow-up or AI response - add to conversation history
+                self.conversations[phone].append({
+                    "role": "assistant",
+                    "content": message
+                })
             # If already in monitoring, this is an AI response - don't modify history
             # (History is already managed in generate_ai_response)
 
@@ -2121,6 +2169,12 @@ Keep responses concise and helpful."""
             self.conversations[phone].append({"role": "user", "content": message})
             self.conversations[phone].append({"role": "assistant", "content": clean_response})
 
+            # Mark customer as responded (for follow-up tracking)
+            if phone in self.last_contact_time:
+                self.customer_responded[phone] = True
+                # Reset follow-up flag since customer responded
+                self.followup_sent[phone] = False
+
             # Keep only last 20 messages
             if len(self.conversations[phone]) > 20:
                 self.conversations[phone] = self.conversations[phone][-20:]
@@ -2226,11 +2280,121 @@ Keep responses concise and helpful."""
         except Exception as e:
             print(f"⚠️  Error starting monitoring for {phone}: {e}")
 
+    def _generate_followup_message(self, phone: str) -> str:
+        """
+        Generate a follow-up message for a customer who didn't respond.
+        
+        Args:
+            phone: Customer phone number
+            
+        Returns:
+            Follow-up message text
+        """
+        # Get customer name if available
+        customer_name = "Customer"
+        if self.contacts_df is not None:
+            try:
+                # Try to find customer in contacts_df
+                phone_clean = phone.replace('+', '').replace(' ', '').replace('-', '')
+                for idx, row in self.contacts_df.iterrows():
+                    row_phone = str(row.get('phone_formatted', row.get('phone', '')))
+                    row_phone_clean = row_phone.replace('+', '').replace(' ', '').replace('-', '')
+                    if phone_clean in row_phone_clean or row_phone_clean in phone_clean:
+                        customer_name = str(row.get('name', 'Customer'))
+                        break
+            except Exception:
+                pass  # Use default name if lookup fails
+        
+        # Use custom template if provided, otherwise use default
+        if self.followup_message_template:
+            # Replace placeholders
+            message = self.followup_message_template
+            message = message.replace('{name}', customer_name)
+            message = message.replace('{phone}', phone)
+            return message
+        
+        # Default follow-up message (Arabic only)
+        default_followup = f"""مرحباً {customer_name}! 👋
+
+نشكرك على وقتك. نود أن نتأكد أنك رأيت عرضنا على Tiger Balm.
+
+هل لديك أي أسئلة؟ نحن هنا للمساعدة! 💬"""
+        
+        return default_followup
+
+    def _check_and_send_followups(self, contacts: List[str]) -> int:
+        """
+        Check which contacts need follow-up messages and send them.
+        
+        Args:
+            contacts: List of phone numbers to check
+            
+        Returns:
+            Number of follow-ups sent
+        """
+        if not self.followup_enabled:
+            return 0
+        
+        followups_sent = 0
+        current_time = datetime.now()
+        
+        for phone in contacts:
+            try:
+                # Check if this contact is eligible for follow-up
+                if phone not in self.last_contact_time:
+                    continue  # Never contacted, skip
+                
+                # Skip if customer already responded
+                if self.customer_responded.get(phone, False):
+                    continue  # Customer responded, no follow-up needed
+                
+                # Skip if we already sent a follow-up
+                if self.followup_sent.get(phone, False):
+                    continue  # Already sent follow-up
+                
+                # Check if enough time has passed
+                last_contact = self.last_contact_time[phone]
+                time_since_contact = (current_time - last_contact).total_seconds() / 60  # Convert to minutes
+                
+                if time_since_contact >= self.followup_delay_minutes:
+                    # Time to send follow-up!
+                    print(f"📬 Sending follow-up to {phone} (no response after {time_since_contact:.1f} minutes)")
+                    
+                    # Generate follow-up message
+                    followup_msg = self._generate_followup_message(phone)
+                    
+                    # Send follow-up message
+                    # Note: send_message will handle this as a regular message (not first contact)
+                    # since phone is already in monitored_contacts
+                    if self.send_message(phone, followup_msg, media_path=None):
+                        self.followup_sent[phone] = True
+                        # DON'T update last_contact_time - keep original contact time for tracking
+                        # We update followup_sent flag to prevent sending multiple follow-ups
+                        followups_sent += 1
+                        print(f"   ✅ Follow-up sent to {phone}")
+                    else:
+                        print(f"   ❌ Failed to send follow-up to {phone}")
+                        
+            except Exception as e:
+                print(f"   ⚠️  Error sending follow-up to {phone}: {e}")
+                continue
+        
+        if followups_sent > 0:
+            print(f"📊 Sent {followups_sent} follow-up message(s)")
+        
+        return followups_sent
+
     def _check_all_contacts_parallel(self, contacts: List[str]) -> Dict[str, Optional[str]]:
         """
         Optimized contact checking: Uses faster sequential checking with reduced waits.
-        Since Selenium is not thread-safe, we optimize by reducing wait times and
-        batching operations rather than true parallelism.
+        
+        NOTE: WhatsApp Web only allows ONE active session per account, so we cannot use
+        multiple browser instances for true parallelism. This method optimizes the
+        sequential checking process by:
+        1. Reducing wait times (2-3s instead of 3-5s per contact)
+        2. Reducing verbose logging (faster execution)
+        3. Using smart caching to skip already-seen messages
+        4. Batch processing all contacts in one cycle
         
         Args:
             contacts: List of phone numbers to check
@@ -2244,12 +2408,14 @@ Keep responses concise and helpful."""
             return results
         
         print(f"⚡ Optimized check: Processing {len(contacts)} contacts efficiently...")
+        print(f"   (WhatsApp Web allows only 1 session, so sequential checking is optimized)")
         
-        # Check contacts sequentially but with optimizations:
-        # 1. Reduced wait times where possible
-        # 2. Skip chat opening if we can detect messages from URL/state
-        # 3. Batch similar operations
+        # Check contacts sequentially with optimizations:
+        # - Reduced wait times (40-50% faster than before)
+        # - Smart message deduplication (skip already-seen messages)
+        # - Minimal logging for faster execution
         
+        start_time = time.time()
         for idx, phone in enumerate(contacts):
             try:
                 # Quick check: use get_new_messages with optimized settings
@@ -2259,18 +2425,20 @@ Keep responses concise and helpful."""
                 if new_msg:
                     results[phone] = new_msg
                     print(f"   ✅ {phone}: New message found")
-                else:
-                    # No new message - result stays None
-                    pass
+                # No new message - result stays None (no logging for speed)
                     
             except Exception as e:
                 print(f"   ⚠️  Error checking {phone}: {e}")
                 results[phone] = None
                 continue
         
-        # Count results
+        # Count results and show performance
+        elapsed_time = time.time() - start_time
         new_messages_count = sum(1 for msg in results.values() if msg is not None)
+        avg_time_per_contact = elapsed_time / len(contacts) if contacts else 0
+        
         print(f"📊 Check complete: {new_messages_count} contacts have new messages out of {len(contacts)}")
+        print(f"   ⏱️  Total time: {elapsed_time:.1f}s | Avg: {avg_time_per_contact:.1f}s per contact")
         
         return results
 
@@ -2317,6 +2485,12 @@ Keep responses concise and helpful."""
                             print(f"\n📨 New message from {phone}!")
                             print(f"   Customer: {new_msg[:100]}...")
                             
+                            # Mark customer as responded (for follow-up tracking)
+                            if phone in self.last_contact_time:
+                                self.customer_responded[phone] = True
+                                # Reset follow-up flag since customer responded
+                                self.followup_sent[phone] = False
+                            
                             # Generate AI response
                             if self.ai_enabled:
                                 print(f"   🤖 Generating AI response...")
@@ -2331,6 +2505,13 @@ Keep responses concise and helpful."""
                                     print(f"   ❌ Failed to send response to {phone}")
                             else:
                                 print(f"   ⚠️  AI not enabled - skipping response")
+                    
+                    # Check for follow-ups (customers who didn't respond)
+                    if self.followup_enabled and not self.bulk_sending_active:
+                        try:
+                            self._check_and_send_followups(active_contacts)
+                        except Exception as followup_err:
+                            print(f"⚠️  Error in follow-up check: {followup_err}")
                 
                 except Exception as e:
                     print(f"⚠️  Error in optimized checking: {e}")
