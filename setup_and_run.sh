@@ -97,6 +97,35 @@ echo "   (This may take a few minutes)"
 pip install --upgrade pip
 pip install -r requirements.txt
 
+# Setup OpenAI API key
+echo ""
+echo "🔑 Setting up OpenAI API key..."
+# Your OpenAI API key (pre-configured)
+
+if [ ! -f ".env" ]; then
+    if [ -f ".env.example" ]; then
+        echo "📋 Creating .env file from .env.example..."
+        cp .env.example .env
+    else
+        echo "📋 Creating .env file..."
+        touch .env
+    fi
+fi
+
+# Add or update OPENAI_API_KEY in .env
+if grep -q "OPENAI_API_KEY=" .env 2>/dev/null; then
+    # Update existing key
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS
+    else
+        # Linux
+    fi
+    echo "✅ API key updated in .env file"
+else
+    # Add new key
+    echo "✅ API key saved to .env file"
+fi
+
 # Check if Chrome is installed
 if ! command -v google-chrome &> /dev/null && ! command -v chromium &> /dev/null; then
     echo "⚠️  Chrome/Chromium not found. Installing Chrome..."
