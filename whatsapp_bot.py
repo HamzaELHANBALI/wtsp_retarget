@@ -810,55 +810,235 @@ Keep responses concise and helpful."""
 
             # STEP 2: Click attachment button - try multiple selectors
             print("📎 Opening attachment menu...")
+            
+            # First, ensure the input area is focused and visible
+            try:
+                # Scroll to bottom to ensure input area is visible
+                self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                time.sleep(0.5)
+                
+                # Click on the input box to ensure focus
+                input_box = self.wait.until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "div[contenteditable='true'][data-tab='10']"))
+                )
+                input_box.click()
+                time.sleep(0.5)
+            except Exception as e:
+                print(f"   ℹ️  Could not focus input: {e}")
 
+            # Wait a bit for UI to settle
+            time.sleep(0.5)
+
+            # Comprehensive list of attachment button selectors (WhatsApp Web uses different ones)
             attach_selectors = [
-                "[data-icon='plus']",  # Plus icon (new WhatsApp UI)
-                "[data-icon='clip']",  # Clip icon
-                "[aria-label='Attach']",  # Aria label
-                "span[data-icon='plus']",
-                "span[data-icon='clip']",
+                # New WhatsApp Web UI
                 "button[aria-label='Attach']",
+                "span[data-icon='attach']",
+                "span[data-icon='clip']",
+                "[data-icon='attach']",
+                "[data-icon='clip']",
+                "[data-icon='plus']",
+                # Alternative selectors
+                "div[role='button'][aria-label*='Attach']",
+                "div[role='button'][title*='Attach']",
+                "button[title*='Attach']",
+                "span[title*='Attach']",
+                # Find by proximity to input box
+                "div[contenteditable='true'][data-tab='10'] ~ div span[data-icon]",
+                "div[contenteditable='true'][data-tab='10'] + div button",
             ]
 
             attach_btn = None
+            clicked = False
+            
+            # Method 1: Try Selenium find_element with explicit wait
             for selector in attach_selectors:
                 try:
-                    attach_btn = self.driver.find_element(By.CSS_SELECTOR, selector)
-                    if attach_btn and attach_btn.is_displayed():
+                    # Try with explicit wait
+                    attach_btn = WebDriverWait(self.driver, 3).until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+                    )
+                    if attach_btn:
+                        # Scroll element into view
+                        self.driver.execute_script("arguments[0].scrollIntoView(true);", attach_btn)
+                        time.sleep(0.3)
                         attach_btn.click()
                         print(f"✅ Opened attachment menu (selector: {selector})")
+                        clicked = True
                         break
                 except:
                     continue
 
-            if not attach_btn:
-                # Try JavaScript fallback
+            # Method 2: JavaScript fallback with more comprehensive search
+            if not clicked:
+                print("   🔄 Trying JavaScript method to find attachment button...")
                 clicked = self.driver.execute_script("""
-                    const selectors = [
-                        '[data-icon="plus"]',
-                        '[data-icon="clip"]',
-                        '[aria-label*="Attach"]',
-                        'button[aria-label*="Attach"]'
-                    ];
-                    for (const sel of selectors) {
-                        const btn = document.querySelector(sel);
-                        if (btn) {
-                            btn.click();
-                            return true;
+                    // Find input box first
+                    const inputBox = document.querySelector('div[contenteditable="true"][data-tab="10"]');
+                    if (!inputBox) {
+                        console.log('Input box not found');
+                        return false;
+                    }
+                    
+                    // Find attachment button - multiple strategies
+                    let attachBtn = null;
+                    
+                    // Strategy 1: Find button with aria-label containing "Attach"
+                    attachBtn = document.querySelector('button[aria-label*="Attach" i]') ||
+                                document.querySelector('div[role="button"][aria-label*="Attach" i]') ||
+                                document.querySelector('[aria-label*="Attach" i]');
+                    
+                    // Strategy 2: Find by data-icon
+                    if (!attachBtn) {
+                        const icons = ['attach', 'clip', 'plus'];
+                        for (const icon of icons) {
+                            attachBtn = document.querySelector(`[data-icon="${icon}"]`) ||
+                                       document.querySelector(`span[data-icon="${icon}"]`);
+                            if (attachBtn) break;
                         }
                     }
+                    
+                    // Strategy 3: Find button near input box (parent or sibling)
+                    if (!attachBtn && inputBox) {
+                        // Look in the same container as input box
+                        const container = inputBox.closest('div[role="textbox"]') || 
+                                        inputBox.closest('div[data-testid]') ||
+                                        inputBox.parentElement?.parentElement;
+                        if (container) {
+                            attachBtn = container.querySelector('button[aria-label*="Attach" i]') ||
+                                       container.querySelector('[data-icon="attach"]') ||
+                                       container.querySelector('[data-icon="clip"]') ||
+                                       container.querySelector('[data-icon="plus"]');
+                        }
+                    }
+                    
+                    // Strategy 4: Find all buttons and look for attachment-related ones
+                    if (!attachBtn) {
+                        const allButtons = document.querySelectorAll('button, div[role="button"]');
+                        for (const btn of allButtons) {
+                            const ariaLabel = btn.getAttribute('aria-label') || '';
+                            const title = btn.getAttribute('title') || '';
+                            if (ariaLabel.toLowerCase().includes('attach') || 
+                                title.toLowerCase().includes('attach') ||
+                                btn.querySelector('[data-icon="attach"]') ||
+                                btn.querySelector('[data-icon="clip"]')) {
+                                attachBtn = btn;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    if (attachBtn) {
+                        console.log('Found attachment button:', attachBtn);
+                        // Scroll into view
+                        attachBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        // Try clicking
+                        attachBtn.click();
+                        return true;
+                    }
+                    
+                    console.log('Attachment button not found');
                     return false;
                 """)
 
                 if clicked:
                     print("✅ Opened attachment menu (via JavaScript)")
+                    time.sleep(1)  # Wait for menu to open
                 else:
-                    raise Exception("Could not find attachment button")
+                    # Last resort: Try to find by searching the entire page
+                    print("   🔄 Trying comprehensive page search...")
+                    try:
+                        # Get all clickable elements near the input area
+                        all_elements = self.driver.find_elements(By.CSS_SELECTOR, 
+                            "div[contenteditable='true'][data-tab='10'] ~ * button, " +
+                            "div[contenteditable='true'][data-tab='10'] ~ * [role='button'], " +
+                            "div[contenteditable='true'][data-tab='10'] ~ * span[data-icon]"
+                        )
+                        
+                        for elem in all_elements[:10]:  # Check first 10 elements
+                            try:
+                                aria_label = elem.get_attribute('aria-label') or ''
+                                if 'attach' in aria_label.lower() or 'clip' in aria_label.lower():
+                                    self.driver.execute_script("arguments[0].scrollIntoView(true);", elem)
+                                    time.sleep(0.3)
+                                    elem.click()
+                                    print(f"✅ Found attachment button by aria-label: {aria_label}")
+                                    clicked = True
+                                    break
+                            except:
+                                continue
+                                
+                        if not clicked:
+                            # Debug: Print what buttons we found
+                            print("   🔍 Debug: Searching for attachment button...")
+                            debug_info = self.driver.execute_script("""
+                                const inputBox = document.querySelector('div[contenteditable="true"][data-tab="10"]');
+                                const container = inputBox ? inputBox.closest('div[data-testid]') || inputBox.parentElement : null;
+                                const buttons = container ? container.querySelectorAll('button, div[role="button"], span[data-icon]') : [];
+                                return Array.from(buttons).slice(0, 10).map(btn => ({
+                                    tag: btn.tagName,
+                                    ariaLabel: btn.getAttribute('aria-label'),
+                                    title: btn.getAttribute('title'),
+                                    dataIcon: btn.getAttribute('data-icon'),
+                                    className: btn.className,
+                                    visible: btn.offsetParent !== null
+                                }));
+                            """)
+                            if debug_info:
+                                print(f"   📋 Found {len(debug_info)} potential buttons near input:")
+                                for i, info in enumerate(debug_info[:5]):
+                                    print(f"      {i+1}. {info.get('tag')} - aria-label: {info.get('ariaLabel')}, data-icon: {info.get('dataIcon')}, visible: {info.get('visible')}")
+                            
+                            # Don't raise exception yet - try alternative methods first
+                            print("   ⚠️  Attachment button not found - will try alternative methods")
+                    except Exception as e:
+                        print(f"   ⚠️  Comprehensive search had issues: {e}")
+                        print("   💡 Will try to continue with file input directly...")
+            
+            # If attachment button wasn't clicked, try alternative methods
+            if not clicked:
+                print("   🔄 Trying alternative methods to access file upload...")
+                
+                # Method 1: Check if file input already exists (sometimes WhatsApp has it available)
+                file_inputs = self.driver.find_elements(By.CSS_SELECTOR, "input[type='file']")
+                if file_inputs:
+                    print(f"   ✅ Found {len(file_inputs)} file input(s) - will use directly")
+                    # Skip the attachment button click and go straight to file input
+                    # We'll handle this in the file input section below
+                else:
+                    # Method 2: Try keyboard shortcut (Ctrl+O or Cmd+O to open file)
+                    print("   🔄 Trying keyboard shortcut to open file dialog...")
+                    try:
+                        input_box = self.driver.find_element(By.CSS_SELECTOR, "div[contenteditable='true'][data-tab='10']")
+                        input_box.click()
+                        time.sleep(0.3)
+                        # Try Cmd+O (Mac) or Ctrl+O (Windows/Linux)
+                        import platform
+                        if platform.system() == 'Darwin':  # macOS
+                            input_box.send_keys(Keys.COMMAND + 'o')
+                        else:
+                            input_box.send_keys(Keys.CONTROL + 'o')
+                        time.sleep(1)
+                        print("   ✅ Sent keyboard shortcut - checking for file input...")
+                        file_inputs = self.driver.find_elements(By.CSS_SELECTOR, "input[type='file']")
+                        if file_inputs:
+                            print(f"   ✅ File input appeared after keyboard shortcut!")
+                            clicked = True  # Mark as successful
+                    except Exception as kb_err:
+                        print(f"   ⚠️  Keyboard shortcut failed: {kb_err}")
+                
+                # Method 3: Try right-click context menu (if file input still not found)
+                if not file_inputs and not clicked:
+                    print("   🔄 File input still not found - you may need to manually attach file")
+                    print("   💡 The bot will continue but media attachment may fail")
+                    # Don't raise exception - let it try to continue and fail gracefully later
 
-            time.sleep(1.5)
+            # Only wait if we successfully clicked attachment button
+            if clicked:
+                time.sleep(1.5)
 
-            # Now find and click "Photos & Videos" for video preview
-            if is_video:
+            # Now find and click "Photos & Videos" for video preview (only if attachment menu opened)
+            if is_video and clicked:
                 print("🎥 Selecting 'Photos & Videos' option...")
 
                 # Give menu time to fully render
