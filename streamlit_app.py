@@ -78,6 +78,8 @@ if 'monitored_contacts' not in st.session_state:
     st.session_state.monitored_contacts = []
 if 'auto_monitoring_enabled' not in st.session_state:
     st.session_state.auto_monitoring_enabled = True
+if 'selected_contacts' not in st.session_state:
+    st.session_state.selected_contacts = []  # List of selected phone numbers for sending
 
 # Helper functions
 def auto_add_to_monitoring(phone):
@@ -710,6 +712,10 @@ with tab1:
                             if st.session_state.bot:
                                 st.session_state.bot.contacts_df = df
 
+                            # Initialize selected contacts with all valid contacts (all selected by default)
+                            valid_contacts_df = df[df['phone_valid'] == True]
+                            st.session_state.selected_contacts = valid_contacts_df['phone_formatted'].tolist()
+
                             # Show preview
                             st.success(f"✅ Loaded {len(df)} contacts")
 
@@ -838,16 +844,96 @@ with tab1:
 
             st.divider()
 
-            # Send messages button
+            # Contact Selection Section
+            contacts_to_send = pd.DataFrame()  # Initialize empty DataFrame
+            
             if st.session_state.contacts_df is not None:
                 valid_contacts = st.session_state.contacts_df[st.session_state.contacts_df['phone_valid'] == True]
-
-                if len(valid_contacts) > max_messages_per_session:
-                    st.warning(f"⚠️ You have {len(valid_contacts)} valid contacts, but max limit is {max_messages_per_session}. Only the first {max_messages_per_session} will be sent.")
-                    contacts_to_send = valid_contacts.head(max_messages_per_session)
+                
+                if len(valid_contacts) > 0:
+                    st.subheader("📋 Select Contacts to Send")
+                    
+                    # Create a formatted list of contacts for display in multiselect
+                    # Format: "Name (Phone)" for better readability
+                    contact_options = []
+                    contact_phone_map = {}  # Map display string to phone number
+                    
+                    for idx, contact in valid_contacts.iterrows():
+                        name = contact.get('name', 'Customer')
+                        phone = contact['phone_formatted']
+                        # Create display string
+                        display_name = f"{name} ({phone})"
+                        contact_options.append(display_name)
+                        contact_phone_map[display_name] = phone
+                    
+                    # Get current selected contacts (if any)
+                    # If selected_contacts is empty or doesn't match current valid contacts, initialize with all
+                    if not st.session_state.selected_contacts or len(st.session_state.selected_contacts) == 0:
+                        st.session_state.selected_contacts = valid_contacts['phone_formatted'].tolist()
+                    
+                    # Convert selected phone numbers to display names for multiselect
+                    current_selected = [
+                        f"{row['name']} ({row['phone_formatted']})" 
+                        for _, row in valid_contacts.iterrows() 
+                        if row['phone_formatted'] in st.session_state.selected_contacts
+                    ]
+                    
+                    # If no current selection matches (e.g., after CSV reload), select all
+                    if not current_selected:
+                        current_selected = contact_options.copy()
+                        st.session_state.selected_contacts = valid_contacts['phone_formatted'].tolist()
+                    
+                    # Multiselect widget for contact selection
+                    selected_display_names = st.multiselect(
+                        "Select contacts to send messages to (all selected by default)",
+                        options=contact_options,
+                        default=current_selected,
+                        help="Uncheck contacts you don't want to contact. All contacts are selected by default."
+                    )
+                    
+                    # Convert selected display names back to phone numbers
+                    selected_phones = [contact_phone_map[name] for name in selected_display_names]
+                    st.session_state.selected_contacts = selected_phones
+                    
+                    # Show selection summary
+                    col_sel1, col_sel2, col_sel3 = st.columns(3)
+                    with col_sel1:
+                        st.metric("Total Valid", len(valid_contacts))
+                    with col_sel2:
+                        st.metric("Selected", len(selected_phones))
+                    with col_sel3:
+                        st.metric("Unselected", len(valid_contacts) - len(selected_phones))
+                    
+                    # Quick action buttons
+                    col_btn1, col_btn2, col_btn3 = st.columns(3)
+                    with col_btn1:
+                        if st.button("✅ Select All", use_container_width=True):
+                            st.session_state.selected_contacts = valid_contacts['phone_formatted'].tolist()
+                            st.rerun()
+                    with col_btn2:
+                        if st.button("❌ Deselect All", use_container_width=True):
+                            st.session_state.selected_contacts = []
+                            st.rerun()
+                    with col_btn3:
+                        if st.button("🔄 Reset to All", use_container_width=True):
+                            st.session_state.selected_contacts = valid_contacts['phone_formatted'].tolist()
+                            st.rerun()
+                    
+                    st.divider()
+                    
+                    # Filter contacts based on selection
+                    if len(selected_phones) > 0:
+                        contacts_to_send = valid_contacts[valid_contacts['phone_formatted'].isin(selected_phones)]
+                        
+                        # Apply max messages per session limit
+                        if len(contacts_to_send) > max_messages_per_session:
+                            st.warning(f"⚠️ You have {len(contacts_to_send)} selected contacts, but max limit is {max_messages_per_session}. Only the first {max_messages_per_session} will be sent.")
+                            contacts_to_send = contacts_to_send.head(max_messages_per_session)
                 else:
-                    contacts_to_send = valid_contacts
+                    st.warning("⚠️ No valid contacts found in the CSV file")
 
+            # Send messages button
+            if st.session_state.contacts_df is not None and len(contacts_to_send) > 0:
                 if st.button(f"🚀 Send to {len(contacts_to_send)} Contacts", type="primary", disabled=len(contacts_to_send)==0):
                     progress_bar = st.progress(0)
                     status_text = st.empty()
@@ -927,6 +1013,10 @@ with tab1:
                         if st.session_state.bot:
                             st.session_state.bot.bulk_sending_active = False
                             print("✅ Bulk sending finished - background monitoring resumed")
+            elif st.session_state.contacts_df is not None:
+                # Contacts loaded but none selected or no valid contacts
+                if len(contacts_to_send) == 0:
+                    st.info("📋 Select at least one contact to send messages")
             else:
                 st.info("📋 Upload a CSV file to get started")
 
