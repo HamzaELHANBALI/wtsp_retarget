@@ -721,6 +721,14 @@ with tab1:
                             # Filter out invalid phones
                             initial_count = len(cleaned_df)
                             cleaned_df = cleaned_df[cleaned_df['phone'].notna()]
+                            
+                            # Reset index to prevent index-related serialization issues
+                            cleaned_df = cleaned_df.reset_index(drop=True)
+                            
+                            # Ensure all columns are clean (convert to string for safety)
+                            for col in cleaned_df.columns:
+                                if cleaned_df[col].dtype == 'object':
+                                    cleaned_df[col] = cleaned_df[col].astype(str).fillna('')
 
                             st.success(f"✅ Cleaned {initial_count} records → {len(cleaned_df)} valid contacts")
                             st.info(f"📍 Removed {initial_count - len(cleaned_df)} records with invalid phone numbers")
@@ -757,6 +765,13 @@ with tab1:
                                 # E-commerce format already cleaned
                                 df['phone_valid'] = df['phone'].notna()
                                 df['phone_formatted'] = df['phone']
+                            
+                            # Clean DataFrame to prevent serialization issues
+                            # Reset index and ensure all object columns are strings
+                            df = df.reset_index(drop=True)
+                            for col in df.columns:
+                                if df[col].dtype == 'object':
+                                    df[col] = df[col].fillna('').astype(str)
 
                             st.session_state.contacts_df = df
 
@@ -788,10 +803,18 @@ with tab1:
                             if 'address' in df.columns:
                                 display_cols.insert(2, 'address')
 
-                            st.dataframe(
-                                df[display_cols].head(10),
-                                use_container_width=True
-                            )
+                            # Safely display DataFrame with error handling
+                            try:
+                                display_data = df[display_cols].head(10).copy()
+                                # Ensure all data is serializable
+                                display_data = display_data.fillna('')
+                                st.dataframe(
+                                    display_data,
+                                    use_container_width=True
+                                )
+                            except Exception as display_err:
+                                st.warning(f"⚠️ Could not display DataFrame preview: {display_err}")
+                                st.info("💡 The CSV file was loaded successfully, but preview display failed.")
 
                 except Exception as e:
                     st.error(f"❌ Error reading CSV: {str(e)}")
@@ -806,13 +829,16 @@ with tab1:
                 'name': ['Ahmed', 'Fatima', 'Mohammed'],
                 'custom_message': ['Special offer for you!', '', 'Thanks for your support!']
             })
-            csv = sample_data.to_csv(index=False)
-            st.download_button(
-                label="⬇️ Download Sample CSV",
-                data=csv,
-                file_name="contacts_template.csv",
-                mime="text/csv"
-            )
+            try:
+                csv = sample_data.to_csv(index=False, encoding='utf-8')
+                st.download_button(
+                    label="⬇️ Download Sample CSV",
+                    data=csv,
+                    file_name="contacts_template.csv",
+                    mime="text/csv"
+                )
+            except Exception as csv_err:
+                st.error(f"⚠️ Error creating sample CSV: {csv_err}")
 
         with col2:
             st.subheader("💬 Compose Message")
@@ -1071,7 +1097,7 @@ with tab1:
                         
                         with nav_col2:
                             page_input = st.number_input(
-                                "Page",
+                                "Page number",
                                 min_value=1,
                                 max_value=total_pages,
                                 value=current_page + 1,
@@ -1138,8 +1164,10 @@ with tab1:
                                     # Replace special characters in phone for valid key
                                     safe_phone = phone.replace('+', 'plus').replace('-', '_').replace(' ', '_')
                                     checkbox_key = f"contact_checkbox_{safe_phone}_p{current_page}_r{row_idx}"
+                                    # Use contact name as label (hidden for cleaner UI, but required for accessibility)
+                                    checkbox_label = f"Select {name}"
                                     checked = st.checkbox(
-                                        "",
+                                        checkbox_label,
                                         value=is_selected,
                                         key=checkbox_key,
                                         label_visibility="collapsed"
@@ -1734,14 +1762,47 @@ with tab4:
             if len(filtered_leads) > 0:
                 # Convert to DataFrame for better display
                 import pandas as pd
-                df_leads = pd.DataFrame(filtered_leads)
-
-                # Display table
-                st.dataframe(
-                    df_leads,
-                    use_container_width=True,
-                    hide_index=True
-                )
+                try:
+                    df_leads = pd.DataFrame(filtered_leads)
+                    # Reset index to prevent index-related serialization issues
+                    df_leads = df_leads.reset_index(drop=True)
+                    
+                    # Clean DataFrame to prevent serialization issues
+                    # Fill NaN values and ensure all object columns are strings
+                    for col in df_leads.columns:
+                        if df_leads[col].dtype == 'object':
+                            df_leads[col] = df_leads[col].fillna('').astype(str)
+                        else:
+                            df_leads[col] = df_leads[col].fillna('')
+                    
+                    # Display table with error handling to prevent recursion errors
+                    try:
+                        st.dataframe(
+                            df_leads,
+                            use_container_width=True,
+                            hide_index=True
+                        )
+                    except RecursionError:
+                        st.error("⚠️ Recursion error displaying table. This is a known pandas/Streamlit issue.")
+                        st.info("💡 Try filtering the leads or use the download button instead.")
+                        # Show simple text table instead
+                        st.markdown("**Leads List (simple view):**")
+                        for lead in filtered_leads[:50]:  # Show first 50
+                            st.text(f"{lead.get('phone', 'N/A')} - {lead.get('product_confirmed', 'N/A')} - {lead.get('status', 'N/A')}")
+                        if len(filtered_leads) > 50:
+                            st.caption(f"... and {len(filtered_leads) - 50} more leads")
+                    except Exception as display_err:
+                        st.error(f"⚠️ Error displaying leads table: {display_err}")
+                        st.info("💡 Leads data is loaded, but table display failed. Try downloading the CSV instead.")
+                except RecursionError:
+                    st.error("⚠️ Recursion error creating DataFrame. There may be an issue with the leads data.")
+                    st.info("💡 Try clearing the leads file or checking for corrupted data.")
+                    # Prevent infinite rerun
+                    import sys
+                    sys.setrecursionlimit(1000)  # Reset recursion limit
+                except Exception as df_err:
+                    st.error(f"⚠️ Error creating DataFrame: {df_err}")
+                    st.info("💡 There might be an issue with the leads data structure.")
 
                 st.divider()
 
@@ -1778,10 +1839,29 @@ with tab4:
 
                 import io
 
-                # Create CSV string
-                csv_buffer = io.StringIO()
-                df_leads.to_csv(csv_buffer, index=False)
-                csv_string = csv_buffer.getvalue()
+                # Create CSV string with error handling (use filtered_leads directly to avoid DataFrame issues)
+                csv_string = ""
+                try:
+                    # Use Python's csv module instead of pandas to avoid recursion issues
+                    import csv as csv_module
+                    csv_buffer = io.StringIO()
+                    if filtered_leads:
+                        # Get fieldnames from first lead
+                        fieldnames = list(filtered_leads[0].keys())
+                        writer = csv_module.DictWriter(csv_buffer, fieldnames=fieldnames)
+                        writer.writeheader()
+                        for lead in filtered_leads:
+                            # Ensure all values are strings and handle None values
+                            clean_lead = {k: str(v) if v is not None else '' for k, v in lead.items()}
+                            writer.writerow(clean_lead)
+                    csv_string = csv_buffer.getvalue()
+                except RecursionError:
+                    st.error("⚠️ Recursion error creating CSV export. This is a pandas/Streamlit compatibility issue.")
+                    st.info("💡 The leads data is loaded, but CSV export failed due to a technical issue.")
+                    csv_string = ""  # Empty CSV if export fails
+                except Exception as csv_err:
+                    st.error(f"⚠️ Error creating CSV export: {csv_err}")
+                    csv_string = ""  # Empty CSV if export fails
 
                 st.download_button(
                     label="⬇️ Download Leads CSV",
