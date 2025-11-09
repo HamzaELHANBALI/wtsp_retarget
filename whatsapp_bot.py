@@ -8,6 +8,7 @@ import time
 import random
 import csv
 import re
+import json
 import threading
 from typing import Optional, List, Dict
 from datetime import datetime
@@ -204,6 +205,10 @@ Keep responses concise and helpful."""
         # Leads tracking
         self.leads_file = Path.cwd() / "confirmed_leads.csv"
         self._initialize_leads_file()
+
+        # State persistence (to remember contacted customers across restarts)
+        self.state_file = Path.cwd() / "bot_state.json"
+        self._load_state()  # Load previous state on startup
 
         # Setup browser
         self.driver = None
@@ -547,6 +552,95 @@ Keep responses concise and helpful."""
         except Exception as e:
             print(f"⚠️  Failed to update lead status: {e}")
 
+    def _load_state(self):
+        """Load bot state from file (monitored contacts, contact times, etc.)"""
+        if self.state_file.exists():
+            try:
+                with open(self.state_file, 'r', encoding='utf-8') as f:
+                    state = json.load(f)
+                
+                # Load monitored contacts
+                self.monitored_contacts = state.get('monitored_contacts', [])
+                
+                # Load last contact times (convert ISO strings back to datetime)
+                last_contact_times = state.get('last_contact_time', {})
+                for phone, time_str in last_contact_times.items():
+                    try:
+                        self.last_contact_time[phone] = datetime.fromisoformat(time_str)
+                    except (ValueError, AttributeError):
+                        # Skip invalid timestamps
+                        pass
+                
+                # Load customer response status
+                self.customer_responded = state.get('customer_responded', {})
+                
+                # Load follow-up status
+                self.followup_sent = state.get('followup_sent', {})
+                
+                # Load seen message IDs and texts (convert lists back to sets)
+                seen_message_ids_dict = state.get('seen_message_ids', {})
+                self.seen_message_ids = {
+                    phone: set(ids) for phone, ids in seen_message_ids_dict.items()
+                }
+                seen_message_texts_dict = state.get('seen_message_texts', {})
+                self.seen_message_texts = {
+                    phone: set(texts) for phone, texts in seen_message_texts_dict.items()
+                }
+                
+                print(f"✅ Loaded bot state: {len(self.monitored_contacts)} contacted customers")
+                if self.monitored_contacts:
+                    print(f"   📋 Previously contacted: {len(self.monitored_contacts)} customers")
+                    print(f"   ⏰ Contact times tracked: {len(self.last_contact_time)}")
+                    responded_count = sum(1 for v in self.customer_responded.values() if v)
+                    print(f"   💬 Responses tracked: {responded_count}")
+                    followup_count = sum(1 for v in self.followup_sent.values() if v)
+                    print(f"   📬 Follow-ups sent: {followup_count}")
+            except Exception as e:
+                print(f"⚠️  Error loading bot state: {e}")
+                print("   Starting with fresh state")
+        else:
+            print("ℹ️  No previous bot state found - starting fresh")
+
+    def _save_state(self):
+        """Save bot state to file (monitored contacts, contact times, etc.)"""
+        try:
+            # Convert datetime objects to ISO strings for JSON serialization
+            last_contact_times_iso = {
+                phone: time.isoformat() if isinstance(time, datetime) else str(time)
+                for phone, time in self.last_contact_time.items()
+            }
+            
+            # Convert sets to lists for JSON serialization
+            seen_message_ids_dict = {
+                phone: list(ids) for phone, ids in self.seen_message_ids.items()
+            }
+            seen_message_texts_dict = {
+                phone: list(texts) for phone, texts in self.seen_message_texts.items()
+            }
+            
+            state = {
+                'monitored_contacts': self.monitored_contacts,
+                'last_contact_time': last_contact_times_iso,
+                'customer_responded': self.customer_responded,
+                'followup_sent': self.followup_sent,
+                'seen_message_ids': seen_message_ids_dict,
+                'seen_message_texts': seen_message_texts_dict,
+                'last_saved': datetime.now().isoformat()
+            }
+            
+            # Save to file atomically (write to temp file, then rename)
+            temp_file = self.state_file.with_suffix('.tmp')
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                json.dump(state, f, indent=2, ensure_ascii=False)
+            
+            # Atomic rename (works on both Unix and Windows)
+            temp_file.replace(self.state_file)
+            
+        except Exception as e:
+            print(f"⚠️  Error saving bot state: {e}")
+            import traceback
+            traceback.print_exc()
+
     def _open_chat_safely(self, phone: str, force: bool = False) -> bool:
         """
         Safely open a chat with thread-safe locking and current chat tracking.
@@ -629,6 +723,8 @@ Keep responses concise and helpful."""
                 self.last_contact_time[phone] = datetime.now()
                 self.customer_responded[phone] = False
                 self.followup_sent[phone] = False
+                # Save state after adding new contact
+                self._save_state()
             
             # Send media if provided
             if media_path and os.path.exists(media_path):
@@ -2174,6 +2270,8 @@ Keep responses concise and helpful."""
                 self.customer_responded[phone] = True
                 # Reset follow-up flag since customer responded
                 self.followup_sent[phone] = False
+                # Save state after customer responds
+                self._save_state()
 
             # Keep only last 20 messages
             if len(self.conversations[phone]) > 20:
@@ -2371,6 +2469,8 @@ Keep responses concise and helpful."""
                         # DON'T update last_contact_time - keep original contact time for tracking
                         # We update followup_sent flag to prevent sending multiple follow-ups
                         followups_sent += 1
+                        # Save state after sending follow-up
+                        self._save_state()
                         print(f"   ✅ Follow-up sent to {phone}")
                     else:
                         print(f"   ❌ Failed to send follow-up to {phone}")
@@ -2490,6 +2590,8 @@ Keep responses concise and helpful."""
                                 self.customer_responded[phone] = True
                                 # Reset follow-up flag since customer responded
                                 self.followup_sent[phone] = False
+                                # Save state after customer responds
+                                self._save_state()
                             
                             # Generate AI response
                             if self.ai_enabled:
