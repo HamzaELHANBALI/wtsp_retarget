@@ -49,8 +49,8 @@ Thumbs.db
 # CSV files (if they contain sensitive data)
 confirmed_leads.csv
 
-# Sleep prevention scripts
-prevent_sleep.sh
+# Sleep prevention scripts (keep prevent_sleep.sh - it's useful)
+# prevent_sleep.sh  # Keep this one - it's needed
 run_bot_with_no_sleep.sh
 KEEPING_BOT_RUNNING.md
 confirmation_leads.csv
