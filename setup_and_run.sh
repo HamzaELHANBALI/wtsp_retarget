@@ -1,13 +1,28 @@
 #!/bin/bash
 
-# Simple setup and run script for macOS
-# This script automatically installs everything needed and runs the app
+# ============================================================================
+# WhatsApp Bot Setup Script for macOS
+# ============================================================================
 # 
-# Usage:
-#   1. Save this file as setup_and_run.sh
-#   2. Make it executable: chmod +x setup_and_run.sh
-#   3. Run it: ./setup_and_run.sh
-#   4. The script will automatically clone the repository and set everything up
+# IMPORTANT: If you get "Permission Denied" error, use:
+#   bash setup_and_run.sh
+# 
+# This works even without execute permissions!
+#
+# Usage Options:
+#   1. bash setup_and_run.sh           (RECOMMENDED - always works)
+#   2. sh setup_and_run.sh             (Alternative)
+#   3. chmod +x setup_and_run.sh && ./setup_and_run.sh  (After making executable)
+#
+# The script will automatically install everything needed and run the app.
+# ============================================================================
+
+# Auto-fix permissions for future runs (optional)
+# This allows the script to be run with ./setup_and_run.sh next time
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+if [ -f "$SCRIPT_PATH" ] && [ ! -x "$SCRIPT_PATH" ]; then
+    chmod +x "$SCRIPT_PATH" 2>/dev/null && echo "🔧 Script is now executable for future runs"
+fi
 
 echo "🚀 WhatsApp Bot Setup"
 echo "===================="

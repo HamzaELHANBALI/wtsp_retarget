@@ -67,31 +67,50 @@ class WhatsAppBot:
 
         if api_key:
             try:
-                # Initialize OpenAI client with explicit parameters only
-                # Avoid any proxy or environment variable issues
-                self.openai_client = OpenAI(
-                    api_key=api_key,
-                    timeout=60.0,
-                    max_retries=2
-                )
+                # Try minimal initialization first (most compatible)
+                # Only pass api_key to avoid any version-specific parameter issues
+                self.openai_client = OpenAI(api_key=api_key)
                 self.ai_enabled = True
                 print("✅ OpenAI API configured")
             except TypeError as e:
-                # Handle version mismatch or unexpected argument errors
-                print(f"⚠️  OpenAI initialization failed: {e}")
-                print("   Trying alternative initialization...")
-                try:
-                    # Fallback: minimal initialization
-                    self.openai_client = OpenAI(api_key=api_key)
-                    self.ai_enabled = True
-                    print("✅ OpenAI API configured (fallback method)")
-                except Exception as e2:
-                    print(f"⚠️  OpenAI initialization failed: {e2}")
-                    print("   Try: pip install --upgrade openai")
+                # Handle version mismatch - the error mentions 'proxies' which suggests
+                # an environment variable or old code is trying to pass it
+                error_msg = str(e).lower()
+                if "proxies" in error_msg or "unexpected keyword" in error_msg:
+                    print(f"⚠️  OpenAI version/compatibility issue: {e}")
+                    print("   💡 This might be due to environment variables or library version")
+                    print("   💡 Trying to clear any proxy settings and retry...")
+                    # Remove any proxy-related env vars temporarily
+                    proxy_vars = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 
+                                 'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy']
+                    saved_proxies = {}
+                    for var in proxy_vars:
+                        if var in os.environ:
+                            saved_proxies[var] = os.environ.pop(var)
+                    
+                    try:
+                        # Try again without proxy env vars
+                        self.openai_client = OpenAI(api_key=api_key)
+                        self.ai_enabled = True
+                        print("✅ OpenAI API configured (after clearing proxy settings)")
+                    except Exception as e2:
+                        # Restore proxy vars
+                        os.environ.update(saved_proxies)
+                        print(f"⚠️  OpenAI initialization failed: {e2}")
+                        print("   💡 Try: pip install --upgrade openai")
+                        print("   💡 Or check if OPENAI_PROXY or similar env vars are set")
+                        self.ai_enabled = False
+                    else:
+                        # Restore proxy vars if successful
+                        os.environ.update(saved_proxies)
+                else:
+                    print(f"⚠️  OpenAI initialization failed: {e}")
+                    print("   💡 Try: pip install --upgrade openai")
                     self.ai_enabled = False
             except Exception as e:
                 print(f"⚠️  OpenAI initialization failed: {e}")
-                print("   AI responses will be disabled")
+                print("   💡 AI responses will be disabled")
+                print("   💡 Try: pip install --upgrade openai")
                 self.ai_enabled = False
         else:
             print("⚠️  OpenAI API key not found. AI responses disabled.")
@@ -137,8 +156,44 @@ Keep responses concise and helpful."""
         """Setup Chrome browser with WhatsApp Web"""
         print("🌐 Setting up browser...")
 
+        # First, check if Chrome is installed
+        import shutil
+        chrome_paths = [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",  # macOS
+            "/usr/bin/google-chrome",  # Linux
+            "/usr/bin/chromium-browser",  # Linux Chromium
+            "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",  # Windows
+            "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",  # Windows 32-bit
+        ]
+        
+        chrome_binary = None
+        for path in chrome_paths:
+            if Path(path).exists():
+                chrome_binary = path
+                print(f"   ✅ Found Chrome at: {chrome_binary}")
+                break
+        
+        # Also try to find Chrome using 'which' command (for PATH)
+        if not chrome_binary:
+            for cmd in ["google-chrome", "chromium-browser", "chromium", "chrome"]:
+                chrome_path = shutil.which(cmd)
+                if chrome_path:
+                    chrome_binary = chrome_path
+                    print(f"   ✅ Found Chrome in PATH: {chrome_binary}")
+                    break
+        
+        if not chrome_binary:
+            print("   ⚠️  Chrome not found in standard locations")
+            print("   💡 Attempting to use default Chrome installation...")
+        else:
+            print(f"   📍 Using Chrome binary: {chrome_binary}")
+
         # Chrome options
         options = webdriver.ChromeOptions()
+        
+        # Explicitly set Chrome binary path if found
+        if chrome_binary:
+            options.binary_location = chrome_binary
 
         # Persistent profile for session management
         profile_path = Path.cwd() / "whatsapp_profile"
@@ -160,23 +215,70 @@ Keep responses concise and helpful."""
 
         # User agent
         options.add_argument(
-            "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/120.0.0.0 Safari/537.36"
         )
 
         try:
-            # Auto-install ChromeDriver
-            service = Service(ChromeDriverManager().install())
-            self.driver = webdriver.Chrome(service=service, options=options)
+            # Auto-install ChromeDriver with retry and better error handling
+            print("   Installing/checking ChromeDriver...")
+            service = None
+            try:
+                # Try to install ChromeDriver (may download if needed)
+                driver_path = ChromeDriverManager().install()
+                service = Service(driver_path)
+                print(f"   ✅ ChromeDriver found at: {driver_path}")
+            except Exception as driver_error:
+                error_msg = str(driver_error).lower()
+                if "could not reach host" in error_msg or "offline" in error_msg or "network" in error_msg:
+                    print("   ⚠️  Network issue while downloading ChromeDriver")
+                    print("   💡 Trying to find ChromeDriver in system PATH...")
+                    # Try to find chromedriver in PATH
+                    chromedriver_path = shutil.which("chromedriver")
+                    if chromedriver_path:
+                        service = Service(chromedriver_path)
+                        print(f"   ✅ Found ChromeDriver in PATH: {chromedriver_path}")
+                    else:
+                        print("   ⚠️  ChromeDriver not found in PATH")
+                        print("   💡 Creating service without explicit path (will use system default)")
+                        # Don't specify service - let Selenium find it
+                        service = None
+                else:
+                    print(f"   ⚠️  ChromeDriver error: {driver_error}")
+                    # Try to continue without explicit service
+                    service = None
+            
+            # Create Chrome driver instance - explicitly use Chrome, not Firefox
+            if service:
+                self.driver = webdriver.Chrome(service=service, options=options)
+            else:
+                # Try without service - Selenium will attempt to find ChromeDriver
+                print("   ⚠️  Attempting to launch Chrome without explicit ChromeDriver path...")
+                self.driver = webdriver.Chrome(options=options)
+            
+            # Verify we're actually using Chrome (not Firefox or another browser)
+            try:
+                browser_name = self.driver.capabilities.get('browserName', 'unknown')
+                if browser_name.lower() != 'chrome':
+                    raise Exception(f"Wrong browser detected: {browser_name}. Expected Chrome.")
+                print(f"   ✅ Confirmed: Using {browser_name.capitalize()} browser")
+            except Exception as verify_error:
+                print(f"   ⚠️  Could not verify browser: {verify_error}")
+                # Continue anyway - might still work
 
             # Stealth modifications
-            self.driver.execute_cdp_cmd('Network.setUserAgentOverride', {
-                "userAgent": self.driver.execute_script("return navigator.userAgent").replace('Headless', '')
-            })
-            self.driver.execute_script(
-                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-            )
+            try:
+                self.driver.execute_cdp_cmd('Network.setUserAgentOverride', {
+                    "userAgent": self.driver.execute_script("return navigator.userAgent").replace('Headless', '')
+                })
+                self.driver.execute_script(
+                    "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+                )
+            except Exception as stealth_error:
+                # Stealth modifications are optional, continue if they fail
+                print(f"   ⚠️  Could not apply stealth modifications: {stealth_error}")
+                print("   ℹ️  Continuing without stealth modifications...")
 
             self.wait = WebDriverWait(self.driver, 20)
             print("✅ Browser setup complete")
@@ -185,7 +287,17 @@ Keep responses concise and helpful."""
             self._login_whatsapp()
 
         except Exception as e:
-            print(f"❌ Browser setup failed: {e}")
+            error_msg = str(e).lower()
+            if "could not reach host" in error_msg or "offline" in error_msg:
+                print(f"❌ Browser setup failed: Network connection issue")
+                print(f"   Error details: {e}")
+                print("   💡 Please check:")
+                print("      1. Your internet connection")
+                print("      2. Firewall settings (may be blocking ChromeDriver downloads)")
+                print("      3. Try running: pip install --upgrade webdriver-manager")
+                print("      4. Or manually install ChromeDriver from: https://chromedriver.chromium.org/")
+            else:
+                print(f"❌ Browser setup failed: {e}")
             raise
 
     def _login_whatsapp(self):

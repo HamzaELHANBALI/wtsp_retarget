@@ -1,0 +1,41 @@
+═══════════════════════════════════════════════════════════════
+  QUICK INSTRUCTIONS - How to Run the Setup Script
+═══════════════════════════════════════════════════════════════
+
+If you get "Permission Denied" error, use this command:
+
+    bash setup_and_run.sh
+
+That's it! This works even if the file doesn't have execute permissions.
+
+═══════════════════════════════════════════════════════════════
+
+Full Steps:
+
+1. Open Terminal on your Mac
+
+2. Navigate to the folder where setup_and_run.sh is located:
+   cd /path/to/folder
+
+3. Run the script:
+   bash setup_and_run.sh
+
+4. Follow the prompts (enter your API key when asked)
+
+5. Wait for installation to complete
+
+6. The app will open automatically in your browser
+
+═══════════════════════════════════════════════════════════════
+
+Alternative methods (if bash doesn't work):
+
+   sh setup_and_run.sh
+
+Or make it executable first:
+
+   chmod +x setup_and_run.sh
+   ./setup_and_run.sh
+
+═══════════════════════════════════════════════════════════════
+
