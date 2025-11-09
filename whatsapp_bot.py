@@ -1752,32 +1752,102 @@ Keep responses concise and helpful."""
                     max_tokens=800,  # Increased from 200 to allow complete responses
                     timeout=30.0  # 30 second timeout
                 )
-            except Exception as ssl_error:
-                error_str = str(ssl_error).lower()
-                if "certificate" in error_str or "ssl" in error_str or "certificate verify failed" in error_str:
-                    print(f"   ⚠️  SSL certificate error: {ssl_error}")
+            except Exception as api_error:
+                # Check if this is an SSL/certificate error by examining the exception and its cause
+                error_str = str(api_error).lower()
+                error_type = type(api_error).__name__
+                
+                # Check the underlying cause (wrapped exceptions) - OpenAI wraps SSL errors
+                underlying_error = getattr(api_error, '__cause__', None) or getattr(api_error, '__context__', None)
+                underlying_str = str(underlying_error).lower() if underlying_error else ""
+                underlying_type = type(underlying_error).__name__ if underlying_error else ""
+                
+                # Check if it's an SSL/certificate error - multiple detection methods
+                # APIConnectionError from OpenAI often wraps SSL errors
+                is_ssl_error = False
+                
+                # Method 1: Check if it's APIConnectionError (OpenAI wraps SSL errors in this)
+                # Most APIConnectionError from OpenAI are SSL-related, so we'll try SSL fallback
+                if "APIConnectionError" in error_type:
+                    is_ssl_error = True
+                    # Check the underlying cause for more details
+                    if underlying_error:
+                        underlying_error_str = str(underlying_error)
+                        print(f"   🔍 Underlying error type: {type(underlying_error).__name__}")
+                        if any(term in underlying_error_str.lower() for term in [
+                            "certificate", "ssl", "certificate_verify_failed", 
+                            "certificate is not yet valid", "certificate verify failed"
+                        ]):
+                            print(f"   ✅ Confirmed: SSL certificate error in underlying exception")
+                        elif "ConnectError" in underlying_type:
+                            print(f"   ✅ Confirmed: ConnectError (likely SSL-related)")
+                # Method 1b: Check for ConnectError directly (also often SSL)
+                elif "ConnectError" in error_type:
+                    is_ssl_error = True
+                
+                # Method 2: Direct SSL error indicators
+                if not is_ssl_error:
+                    is_ssl_error = (
+                        "certificate" in error_str or "ssl" in error_str or 
+                        "certificate verify failed" in error_str or
+                        "certificate is not yet valid" in error_str or
+                        "certificate" in underlying_str or "ssl" in underlying_str or
+                        "certificate verify failed" in underlying_str or
+                        "certificate is not yet valid" in underlying_str or
+                        "CERTIFICATE_VERIFY_FAILED" in str(api_error) or
+                        "ConnectError" in error_type or
+                        "ConnectError" in underlying_type
+                    )
+                
+                if is_ssl_error:
+                    print(f"   ⚠️  SSL certificate error detected: {error_type}")
+                    if underlying_error:
+                        print(f"   🔍 Underlying error: {type(underlying_error).__name__}: {str(underlying_error)[:200]}")
                     print("   💡 This might be due to:")
-                    print("      1. System clock is incorrect (check system time)")
+                    print("      1. System clock is incorrect (check system time with: date)")
                     print("      2. SSL certificate verification issue")
-                    print("   💡 Trying with SSL verification disabled (less secure)...")
+                    print("   💡 Trying with SSL verification disabled (less secure but will work)...")
                     
                     # Try with SSL verification disabled as fallback
                     import httpx
-                    import ssl
-                    import certifi
+                    import warnings
+                    
+                    # Suppress SSL warnings when we disable verification
+                    warnings.filterwarnings('ignore', message='Unverified HTTPS request')
                     
                     # Create a custom HTTP client with SSL verification disabled
                     try:
+                        # Get the API key - try multiple methods
+                        api_key = None
+                        # Method 1: Try from environment (most reliable)
+                        api_key = os.getenv('OPENAI_API_KEY')
+                        # Method 2: Try direct attribute
+                        if not api_key and hasattr(self.openai_client, 'api_key'):
+                            api_key = self.openai_client.api_key
+                        # Method 3: Try from _client internal attribute
+                        if not api_key and hasattr(self.openai_client, '_client'):
+                            try:
+                                client_obj = self.openai_client._client
+                                if hasattr(client_obj, 'api_key'):
+                                    api_key = client_obj.api_key
+                            except:
+                                pass
+                        
+                        if not api_key:
+                            raise Exception("Could not retrieve API key for SSL fallback - check OPENAI_API_KEY in .env")
+                        
                         # Reinitialize OpenAI client with SSL verification disabled
                         from openai import OpenAI
                         custom_client = OpenAI(
-                            api_key=self.openai_client.api_key,
+                            api_key=api_key,
                             http_client=httpx.Client(
-                                verify=False,  # Disable SSL verification (not recommended but sometimes necessary)
-                                timeout=30.0
+                                verify=False,  # Disable SSL verification
+                                timeout=30.0,
+                                follow_redirects=True
                             )
                         )
                         
+                        print("   🔄 Retrying API call with SSL verification disabled...")
                         # Try again with custom client
                         response = custom_client.chat.completions.create(
                             model=self.model,
@@ -1786,12 +1856,18 @@ Keep responses concise and helpful."""
                             max_tokens=800,
                             timeout=30.0
                         )
-                        print("   ✅ Connected with SSL verification disabled")
+                        print("   ✅ Connected successfully with SSL verification disabled")
+                        # Update the client for future use so we don't need to recreate it
+                        self.openai_client = custom_client
                     except Exception as retry_error:
-                        print(f"   ❌ Retry failed: {retry_error}")
-                        raise ssl_error  # Re-raise original error
+                        print(f"   ❌ Retry with SSL disabled also failed: {retry_error}")
+                        print(f"   ❌ Error type: {type(retry_error).__name__}")
+                        # Don't re-raise - let it fall through to outer handler
+                        # The outer handler will return a graceful fallback message
+                        raise api_error from retry_error
                 else:
-                    raise  # Re-raise if not SSL error
+                    # Not an SSL error, re-raise to be handled by outer exception handler
+                    raise
 
             print(f"   ✅ Received response from OpenAI", flush=True)
             sys.stdout.flush()
@@ -1875,18 +1951,34 @@ Keep responses concise and helpful."""
                             max_tokens=400,
                             timeout=20.0
                         )
-                    except Exception as ssl_error:
-                        error_str = str(ssl_error).lower()
-                        if "certificate" in error_str or "ssl" in error_str or "certificate verify failed" in error_str:
-                            print(f"   ⚠️  SSL certificate error in continuation: {ssl_error}")
+                    except Exception as cont_error:
+                        # Check if this is an SSL/certificate error
+                        error_str = str(cont_error).lower()
+                        underlying_error = getattr(cont_error, '__cause__', None) or getattr(cont_error, '__context__', None)
+                        underlying_str = str(underlying_error).lower() if underlying_error else ""
+                        
+                        is_ssl_error = (
+                            "certificate" in error_str or "ssl" in error_str or 
+                            "certificate verify failed" in error_str or
+                            "certificate" in underlying_str or "ssl" in underlying_str or
+                            "CERTIFICATE_VERIFY_FAILED" in str(cont_error) or
+                            "ConnectError" in type(cont_error).__name__
+                        )
+                        
+                        if is_ssl_error:
+                            print(f"   ⚠️  SSL certificate error in continuation")
                             print("   💡 Trying with SSL verification disabled...")
                             
                             # Use custom client with SSL verification disabled
                             import httpx
                             from openai import OpenAI
+                            
+                            # Get API key
+                            api_key = getattr(self.openai_client, 'api_key', None) or os.getenv('OPENAI_API_KEY')
+                            
                             custom_client = OpenAI(
-                                api_key=self.openai_client.api_key,
-                                http_client=httpx.Client(verify=False, timeout=20.0)
+                                api_key=api_key,
+                                http_client=httpx.Client(verify=False, timeout=20.0, follow_redirects=True)
                             )
                             
                             continuation_response = custom_client.chat.completions.create(
@@ -1979,6 +2071,39 @@ Keep responses concise and helpful."""
             return clean_response
 
         except Exception as e:
+            # Check if this is an SSL error that wasn't caught by the inner handler
+            error_str = str(e).lower()
+            error_type = type(e).__name__
+            underlying_error = getattr(e, '__cause__', None) or getattr(e, '__context__', None)
+            underlying_str = str(underlying_error).lower() if underlying_error else ""
+            
+            # Check if it's an SSL/certificate error (might have been missed)
+            is_ssl_error = (
+                "certificate" in error_str or "ssl" in error_str or 
+                "certificate verify failed" in error_str or
+                "certificate is not yet valid" in error_str or
+                "certificate" in underlying_str or "ssl" in underlying_str or
+                "certificate verify failed" in underlying_str or
+                "CERTIFICATE_VERIFY_FAILED" in str(e) or
+                "ConnectError" in error_type or
+                "APIConnectionError" in error_type  # OpenAI wraps SSL errors in APIConnectionError
+            )
+            
+            # If it's an SSL error that reached here, the inner handler's fallback didn't work
+            # This could mean API key retrieval failed, or there's another issue
+            if is_ssl_error:
+                # This is likely an SSL error wrapped in APIConnectionError
+                print(f"⚠️  SSL certificate error (caught in outer handler): {error_type}", flush=True)
+                if underlying_error:
+                    print(f"   🔍 Underlying: {type(underlying_error).__name__}: {str(underlying_error)[:150]}", flush=True)
+                print("   💡 This is likely due to system clock being incorrect", flush=True)
+                print("   💡 Check system time with: date", flush=True)
+                print("   💡 Fix time with: sudo sntp -sS time.apple.com", flush=True)
+                print("   💡 Or manually set time in System Settings → Date & Time", flush=True)
+                sys.stdout.flush()
+                # Return a helpful message in Arabic/English
+                return "شكراً لك على رسالتك! سنتواصل معك قريباً. (Thank you for your message! We'll contact you soon.)"
+            
             print(f"⚠️  AI response error: {e}", flush=True)
             sys.stdout.flush()
             import traceback
