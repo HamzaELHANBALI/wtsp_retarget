@@ -100,8 +100,8 @@ pip install -r requirements.txt
 # Setup OpenAI API key
 echo ""
 echo "🔑 Setting up OpenAI API key..."
-# Your OpenAI API key (pre-configured)
 
+# Create .env file if it doesn't exist
 if [ ! -f ".env" ]; then
     if [ -f ".env.example" ]; then
         echo "📋 Creating .env file from .env.example..."
@@ -112,18 +112,39 @@ if [ ! -f ".env" ]; then
     fi
 fi
 
-# Add or update OPENAI_API_KEY in .env
-if grep -q "OPENAI_API_KEY=" .env 2>/dev/null; then
-    # Update existing key
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        # macOS
-    else
-        # Linux
-    fi
-    echo "✅ API key updated in .env file"
+# Check if a valid API key is already set
+EXISTING_KEY=$(grep "^OPENAI_API_KEY=" .env 2>/dev/null | cut -d'=' -f2- | tr -d ' ' | head -1)
+
+if [ -n "$EXISTING_KEY" ] && [[ "$EXISTING_KEY" == sk-* ]] && [ "$EXISTING_KEY" != "your-api-key-here" ]; then
+    echo "✅ API key already configured in .env file"
 else
-    # Add new key
-    echo "✅ API key saved to .env file"
+    # No valid API key found, prompt for it
+    echo ""
+    echo "Please enter your OpenAI API key:"
+    echo "   (You can get it from: https://platform.openai.com/api-keys)"
+    echo "   (The key will be saved to .env file)"
+    read -r USER_API_KEY
+    
+    if [ -z "$USER_API_KEY" ]; then
+        echo "⚠️  Warning: No API key provided. You'll need to add it manually to .env file"
+        echo "   Format: OPENAI_API_KEY=sk-..."
+    else
+        # Add or update OPENAI_API_KEY in .env
+        if grep -q "^OPENAI_API_KEY=" .env 2>/dev/null; then
+            # Update existing key
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                # macOS
+                sed -i '' "s|^OPENAI_API_KEY=.*|OPENAI_API_KEY=$USER_API_KEY|" .env
+            else
+                # Linux
+                sed -i "s|^OPENAI_API_KEY=.*|OPENAI_API_KEY=$USER_API_KEY|" .env
+            fi
+        else
+            # Add new key
+            echo "OPENAI_API_KEY=$USER_API_KEY" >> .env
+        fi
+        echo "✅ API key saved to .env file"
+    fi
 fi
 
 # Check if Chrome is installed
