@@ -844,91 +844,312 @@ with tab1:
 
             st.divider()
 
-            # Contact Selection Section
+            # Contact Selection Section (Improved for large lists)
             contacts_to_send = pd.DataFrame()  # Initialize empty DataFrame
             
             if st.session_state.contacts_df is not None:
-                valid_contacts = st.session_state.contacts_df[st.session_state.contacts_df['phone_valid'] == True]
+                valid_contacts = st.session_state.contacts_df[st.session_state.contacts_df['phone_valid'] == True].copy()
                 
                 if len(valid_contacts) > 0:
                     st.subheader("📋 Select Contacts to Send")
                     
-                    # Create a formatted list of contacts for display in multiselect
-                    # Format: "Name (Phone)" for better readability
-                    contact_options = []
-                    contact_phone_map = {}  # Map display string to phone number
-                    
-                    for idx, contact in valid_contacts.iterrows():
-                        name = contact.get('name', 'Customer')
-                        phone = contact['phone_formatted']
-                        # Create display string
-                        display_name = f"{name} ({phone})"
-                        contact_options.append(display_name)
-                        contact_phone_map[display_name] = phone
-                    
-                    # Get current selected contacts (if any)
-                    # If selected_contacts is empty or doesn't match current valid contacts, initialize with all
+                    # Initialize selected_contacts if empty (all selected by default)
                     if not st.session_state.selected_contacts or len(st.session_state.selected_contacts) == 0:
                         st.session_state.selected_contacts = valid_contacts['phone_formatted'].tolist()
                     
-                    # Convert selected phone numbers to display names for multiselect
-                    current_selected = [
-                        f"{row['name']} ({row['phone_formatted']})" 
-                        for _, row in valid_contacts.iterrows() 
-                        if row['phone_formatted'] in st.session_state.selected_contacts
+                    # Ensure selected_contacts only contains valid phone numbers
+                    valid_phones = set(valid_contacts['phone_formatted'].tolist())
+                    st.session_state.selected_contacts = [
+                        phone for phone in st.session_state.selected_contacts 
+                        if phone in valid_phones
                     ]
                     
-                    # If no current selection matches (e.g., after CSV reload), select all
-                    if not current_selected:
-                        current_selected = contact_options.copy()
-                        st.session_state.selected_contacts = valid_contacts['phone_formatted'].tolist()
+                    # Add a 'selected' column to the dataframe for easier filtering
+                    valid_contacts['selected'] = valid_contacts['phone_formatted'].isin(st.session_state.selected_contacts)
                     
-                    # Multiselect widget for contact selection
-                    selected_display_names = st.multiselect(
-                        "Select contacts to send messages to (all selected by default)",
-                        options=contact_options,
-                        default=current_selected,
-                        help="Uncheck contacts you don't want to contact. All contacts are selected by default."
-                    )
+                    # === FILTERING AND SEARCH SECTION ===
+                    st.markdown("### 🔍 Filter & Search Contacts")
                     
-                    # Convert selected display names back to phone numbers
-                    selected_phones = [contact_phone_map[name] for name in selected_display_names]
-                    st.session_state.selected_contacts = selected_phones
+                    filter_col1, filter_col2, filter_col3 = st.columns(3)
                     
-                    # Show selection summary
-                    col_sel1, col_sel2, col_sel3 = st.columns(3)
-                    with col_sel1:
-                        st.metric("Total Valid", len(valid_contacts))
-                    with col_sel2:
-                        st.metric("Selected", len(selected_phones))
-                    with col_sel3:
-                        st.metric("Unselected", len(valid_contacts) - len(selected_phones))
+                    with filter_col1:
+                        # Search by name
+                        search_name = st.text_input(
+                            "🔎 Search by Name",
+                            value="",
+                            placeholder="Type name to search...",
+                            help="Filter contacts by name"
+                        )
                     
-                    # Quick action buttons
-                    col_btn1, col_btn2, col_btn3 = st.columns(3)
-                    with col_btn1:
-                        if st.button("✅ Select All", use_container_width=True):
+                    with filter_col2:
+                        # Search by phone
+                        search_phone = st.text_input(
+                            "📱 Search by Phone",
+                            value="",
+                            placeholder="Type phone to search...",
+                            help="Filter contacts by phone number"
+                        )
+                    
+                    with filter_col3:
+                        # Filter by selection status
+                        filter_selection = st.selectbox(
+                            "📊 Filter by Selection",
+                            options=["All", "Selected Only", "Unselected Only"],
+                            help="Show all, only selected, or only unselected contacts"
+                        )
+                    
+                    # Store current filter state to detect changes
+                    current_filters = f"{search_name}|{search_phone}|{filter_selection}"
+                    if 'last_filters' not in st.session_state:
+                        st.session_state.last_filters = ""
+                    
+                    # Reset page to 0 if filters changed
+                    if st.session_state.last_filters != current_filters:
+                        st.session_state.contact_page = 0
+                        st.session_state.last_filters = current_filters
+                    
+                    # Apply filters
+                    filtered_contacts = valid_contacts.copy()
+                    
+                    if search_name:
+                        filtered_contacts = filtered_contacts[
+                            filtered_contacts['name'].str.contains(search_name, case=False, na=False)
+                        ]
+                    
+                    if search_phone:
+                        filtered_contacts = filtered_contacts[
+                            filtered_contacts['phone_formatted'].str.contains(search_phone, case=False, na=False)
+                        ]
+                    
+                    if filter_selection == "Selected Only":
+                        filtered_contacts = filtered_contacts[filtered_contacts['selected'] == True]
+                    elif filter_selection == "Unselected Only":
+                        filtered_contacts = filtered_contacts[filtered_contacts['selected'] == False]
+                    
+                    # Get filtered count
+                    filtered_count = len(filtered_contacts)
+                    
+                    # Ensure page number is valid after filtering
+                    if filtered_count > 0:
+                        # Initialize items_per_page for max_page calculation (use default 100)
+                        items_per_page_default = 100
+                        max_page = (filtered_count - 1) // items_per_page_default
+                        if st.session_state.contact_page > max_page:
+                            st.session_state.contact_page = 0
+                    
+                    # === SELECTION SUMMARY ===
+                    total_valid = len(valid_contacts)
+                    total_selected = len(st.session_state.selected_contacts)
+                    total_unselected = total_valid - total_selected
+                    filtered_selected = filtered_contacts['selected'].sum() if filtered_count > 0 else 0
+                    
+                    col_sum1, col_sum2, col_sum3, col_sum4 = st.columns(4)
+                    with col_sum1:
+                        st.metric("Total Valid", total_valid)
+                    with col_sum2:
+                        st.metric("Selected", total_selected, delta=f"{total_selected/total_valid*100:.1f}%")
+                    with col_sum3:
+                        st.metric("Unselected", total_unselected)
+                    with col_sum4:
+                        st.metric("Filtered Results", filtered_count)
+                    
+                    # === BULK ACTIONS ===
+                    st.markdown("### ⚡ Bulk Actions")
+                    action_col1, action_col2, action_col3, action_col4, action_col5 = st.columns(5)
+                    
+                    with action_col1:
+                        if st.button("✅ Select All", use_container_width=True, help="Select all contacts (including filtered)"):
                             st.session_state.selected_contacts = valid_contacts['phone_formatted'].tolist()
                             st.rerun()
-                    with col_btn2:
-                        if st.button("❌ Deselect All", use_container_width=True):
+                    
+                    with action_col2:
+                        if st.button("✅ Select Filtered", use_container_width=True, help="Select all filtered contacts"):
+                            filtered_phones = filtered_contacts['phone_formatted'].tolist()
+                            st.session_state.selected_contacts = list(set(st.session_state.selected_contacts + filtered_phones))
+                            st.rerun()
+                    
+                    with action_col3:
+                        if st.button("❌ Deselect All", use_container_width=True, help="Deselect all contacts"):
                             st.session_state.selected_contacts = []
                             st.rerun()
-                    with col_btn3:
-                        if st.button("🔄 Reset to All", use_container_width=True):
+                    
+                    with action_col4:
+                        if st.button("❌ Deselect Filtered", use_container_width=True, help="Deselect all filtered contacts"):
+                            filtered_phones = set(filtered_contacts['phone_formatted'].tolist())
+                            st.session_state.selected_contacts = [
+                                phone for phone in st.session_state.selected_contacts 
+                                if phone not in filtered_phones
+                            ]
+                            st.rerun()
+                    
+                    with action_col5:
+                        if st.button("🔄 Reset to All", use_container_width=True, help="Reset: Select all contacts"):
                             st.session_state.selected_contacts = valid_contacts['phone_formatted'].tolist()
                             st.rerun()
                     
                     st.divider()
                     
-                    # Filter contacts based on selection
-                    if len(selected_phones) > 0:
-                        contacts_to_send = valid_contacts[valid_contacts['phone_formatted'].isin(selected_phones)]
+                    # === PAGINATED CONTACT TABLE ===
+                    if filtered_count > 0:
+                        st.markdown(f"### 📋 Contacts ({filtered_count} shown)")
+                        
+                        # Pagination controls
+                        items_per_page = st.slider(
+                            "Contacts per page",
+                            min_value=50,
+                            max_value=500,
+                            value=100,
+                            step=50,
+                            help="Number of contacts to display per page"
+                        )
+                        
+                        # Initialize page number in session state
+                        if 'contact_page' not in st.session_state:
+                            st.session_state.contact_page = 0
+                        
+                        total_pages = (filtered_count - 1) // items_per_page + 1
+                        current_page = st.session_state.contact_page
+                        
+                        # Page navigation
+                        nav_col1, nav_col2, nav_col3, nav_col4 = st.columns([1, 2, 2, 1])
+                        with nav_col1:
+                            if st.button("⬅️ Previous", disabled=current_page == 0, use_container_width=True):
+                                st.session_state.contact_page = max(0, current_page - 1)
+                                st.rerun()
+                        
+                        with nav_col2:
+                            page_input = st.number_input(
+                                "Page",
+                                min_value=1,
+                                max_value=total_pages,
+                                value=current_page + 1,
+                                key="page_input",
+                                label_visibility="collapsed"
+                            )
+                            if page_input != current_page + 1:
+                                st.session_state.contact_page = page_input - 1
+                                st.rerun()
+                        
+                        with nav_col3:
+                            st.caption(f"Page {current_page + 1} of {total_pages} ({filtered_count} total)")
+                        
+                        with nav_col4:
+                            if st.button("Next ➡️", disabled=current_page >= total_pages - 1, use_container_width=True):
+                                st.session_state.contact_page = min(total_pages - 1, current_page + 1)
+                                st.rerun()
+                        
+                        # Get contacts for current page
+                        start_idx = current_page * items_per_page
+                        end_idx = min(start_idx + items_per_page, filtered_count)
+                        page_contacts = filtered_contacts.iloc[start_idx:end_idx]
+                        
+                        # Display contacts with checkboxes in a more compact format
+                        st.markdown("---")
+                        
+                        # Create a container for the contact list
+                        contacts_container = st.container()
+                        
+                        with contacts_container:
+                            # Display contacts in a compact table format
+                            # Use st.dataframe with a custom selection column for better performance
+                            
+                            # Create a display dataframe with selection status
+                            display_df = page_contacts[['name', 'phone_formatted']].copy()
+                            display_df['selected'] = display_df['phone_formatted'].isin(st.session_state.selected_contacts)
+                            display_df['select'] = False  # Placeholder for checkbox column
+                            
+                            # Display as a more compact format using st.columns for each row
+                            # This is more performant than individual checkboxes for large lists
+                            
+                            # Show table header
+                            header_col1, header_col2, header_col3 = st.columns([1, 4, 3])
+                            with header_col1:
+                                st.markdown("**Select**")
+                            with header_col2:
+                                st.markdown("**Name**")
+                            with header_col3:
+                                st.markdown("**Phone**")
+                            
+                            st.markdown("---")
+                            
+                            # Display contacts with checkboxes
+                            for row_idx, (idx, contact) in enumerate(page_contacts.iterrows()):
+                                phone = contact['phone_formatted']
+                                name = contact.get('name', 'Customer') or 'Customer'
+                                is_selected = phone in st.session_state.selected_contacts
+                                
+                                # Create a row
+                                col_chk, col_name, col_phone = st.columns([1, 4, 3])
+                                
+                                with col_chk:
+                                    # Unique checkbox key (use phone number directly, page and row for uniqueness)
+                                    # Replace special characters in phone for valid key
+                                    safe_phone = phone.replace('+', 'plus').replace('-', '_').replace(' ', '_')
+                                    checkbox_key = f"contact_checkbox_{safe_phone}_p{current_page}_r{row_idx}"
+                                    checked = st.checkbox(
+                                        "",
+                                        value=is_selected,
+                                        key=checkbox_key,
+                                        label_visibility="collapsed"
+                                    )
+                                    
+                                    # Update selection immediately if changed
+                                    if checked != is_selected:
+                                        if checked:
+                                            if phone not in st.session_state.selected_contacts:
+                                                st.session_state.selected_contacts.append(phone)
+                                        else:
+                                            if phone in st.session_state.selected_contacts:
+                                                st.session_state.selected_contacts.remove(phone)
+                                        # Rerun to update UI
+                                        st.rerun()
+                                
+                                with col_name:
+                                    # Show name with visual indicator
+                                    if is_selected:
+                                        st.markdown(f"✅ **{name}**")
+                                    else:
+                                        st.markdown(name)
+                                
+                                with col_phone:
+                                    st.text(phone)
+                        
+                        st.markdown("---")
+                        
+                        # Quick selection for current page
+                        page_action_col1, page_action_col2 = st.columns(2)
+                        with page_action_col1:
+                            if st.button(f"✅ Select All on This Page ({len(page_contacts)} contacts)", use_container_width=True):
+                                page_phones = page_contacts['phone_formatted'].tolist()
+                                st.session_state.selected_contacts = list(set(st.session_state.selected_contacts + page_phones))
+                                st.rerun()
+                        
+                        with page_action_col2:
+                            if st.button(f"❌ Deselect All on This Page ({len(page_contacts)} contacts)", use_container_width=True):
+                                page_phones = set(page_contacts['phone_formatted'].tolist())
+                                st.session_state.selected_contacts = [
+                                    phone for phone in st.session_state.selected_contacts 
+                                    if phone not in page_phones
+                                ]
+                                st.rerun()
+                    
+                    else:
+                        st.info("🔍 No contacts match your filters. Try adjusting your search criteria.")
+                    
+                    st.divider()
+                    
+                    # === FINAL SELECTION PROCESSING ===
+                    # Filter contacts based on final selection
+                    if len(st.session_state.selected_contacts) > 0:
+                        contacts_to_send = valid_contacts[valid_contacts['phone_formatted'].isin(st.session_state.selected_contacts)]
                         
                         # Apply max messages per session limit
                         if len(contacts_to_send) > max_messages_per_session:
                             st.warning(f"⚠️ You have {len(contacts_to_send)} selected contacts, but max limit is {max_messages_per_session}. Only the first {max_messages_per_session} will be sent.")
                             contacts_to_send = contacts_to_send.head(max_messages_per_session)
+                    else:
+                        contacts_to_send = pd.DataFrame()  # Empty DataFrame
+                        
                 else:
                     st.warning("⚠️ No valid contacts found in the CSV file")
 
