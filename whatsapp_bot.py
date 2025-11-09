@@ -66,52 +66,97 @@ class WhatsAppBot:
         self.openai_client = None
 
         if api_key:
+            # Clean API key (remove quotes if present)
+            api_key = api_key.strip().strip('"').strip("'")
+            
             try:
-                # Try minimal initialization first (most compatible)
-                # Only pass api_key to avoid any version-specific parameter issues
-                self.openai_client = OpenAI(api_key=api_key)
-                self.ai_enabled = True
-                print("✅ OpenAI API configured")
-            except TypeError as e:
-                # Handle version mismatch - the error mentions 'proxies' which suggests
-                # an environment variable or old code is trying to pass it
-                error_msg = str(e).lower()
-                if "proxies" in error_msg or "unexpected keyword" in error_msg:
-                    print(f"⚠️  OpenAI version/compatibility issue: {e}")
-                    print("   💡 This might be due to environment variables or library version")
-                    print("   💡 Trying to clear any proxy settings and retry...")
-                    # Remove any proxy-related env vars temporarily
-                    proxy_vars = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 
-                                 'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy']
-                    saved_proxies = {}
-                    for var in proxy_vars:
-                        if var in os.environ:
-                            saved_proxies[var] = os.environ.pop(var)
+                # Check OpenAI library version for compatibility
+                import openai as openai_lib
+                openai_version = getattr(openai_lib, '__version__', 'unknown')
+                print(f"   📦 OpenAI library version: {openai_version}")
+                
+                # Save and temporarily clear ALL potential proxy/environment variables
+                # that might interfere with OpenAI initialization
+                env_backup = {}
+                problematic_vars = [
+                    'HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy',
+                    'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy',
+                    'OPENAI_PROXY', 'OPENAI_API_BASE', 'OPENAI_ORG_ID'
+                ]
+                for var in problematic_vars:
+                    if var in os.environ:
+                        env_backup[var] = os.environ.pop(var)
+                
+                try:
+                    # Method 1: Try with minimal initialization (no extra params)
+                    # This works with most OpenAI library versions
+                    import inspect
+                    init_signature = inspect.signature(OpenAI.__init__)
+                    params = list(init_signature.parameters.keys())
                     
-                    try:
-                        # Try again without proxy env vars
-                        self.openai_client = OpenAI(api_key=api_key)
+                    # Only use parameters that definitely exist in the signature
+                    init_kwargs = {'api_key': api_key}
+                    
+                    # Try to initialize
+                    self.openai_client = OpenAI(**init_kwargs)
+                    
+                    # Test if client works by making a simple API call structure check
+                    # (we don't actually call the API, just verify the client was created)
+                    if hasattr(self.openai_client, 'chat') or hasattr(self.openai_client, 'models'):
                         self.ai_enabled = True
-                        print("✅ OpenAI API configured (after clearing proxy settings)")
-                    except Exception as e2:
-                        # Restore proxy vars
-                        os.environ.update(saved_proxies)
-                        print(f"⚠️  OpenAI initialization failed: {e2}")
-                        print("   💡 Try: pip install --upgrade openai")
-                        print("   💡 Or check if OPENAI_PROXY or similar env vars are set")
-                        self.ai_enabled = False
+                        print("✅ OpenAI API configured successfully")
                     else:
-                        # Restore proxy vars if successful
-                        os.environ.update(saved_proxies)
-                else:
-                    print(f"⚠️  OpenAI initialization failed: {e}")
-                    print("   💡 Try: pip install --upgrade openai")
-                    self.ai_enabled = False
+                        raise Exception("OpenAI client created but doesn't have expected methods")
+                        
+                except TypeError as type_err:
+                    error_str = str(type_err).lower()
+                    if "proxies" in error_str or "unexpected keyword" in error_str:
+                        # The library itself might be trying to use proxies internally
+                        # Try importing and patching if possible
+                        print(f"   ⚠️  OpenAI initialization error: {type_err}")
+                        print("   💡 This is a known compatibility issue with some OpenAI versions")
+                        print("   💡 Trying alternative initialization method...")
+                        
+                        # Last resort: Try using environment variable instead of parameter
+                        os.environ['OPENAI_API_KEY'] = api_key
+                        try:
+                            # Initialize without api_key parameter (use env var)
+                            self.openai_client = OpenAI()
+                            self.ai_enabled = True
+                            print("✅ OpenAI API configured (using environment variable method)")
+                        except Exception as env_err:
+                            # Remove the env var we just set
+                            if 'OPENAI_API_KEY' in os.environ:
+                                del os.environ['OPENAI_API_KEY']
+                            raise env_err
+                    else:
+                        raise type_err
+                        
+                except Exception as init_err:
+                    print(f"   ⚠️  OpenAI initialization failed: {init_err}")
+                    raise init_err
+                    
+                finally:
+                    # Restore environment variables
+                    os.environ.update(env_backup)
+                    
             except Exception as e:
+                error_msg = str(e).lower()
                 print(f"⚠️  OpenAI initialization failed: {e}")
-                print("   💡 AI responses will be disabled")
-                print("   💡 Try: pip install --upgrade openai")
+                
+                if "proxies" in error_msg:
+                    print("   💡 Known issue: OpenAI library proxy parameter conflict")
+                    print("   💡 Solution options:")
+                    print("      1. Upgrade OpenAI: pip install --upgrade openai")
+                    print("      2. Or downgrade: pip install 'openai<1.0'")
+                    print("      3. Or use: pip install openai==1.12.0")
+                else:
+                    print("   💡 Try: pip install --upgrade openai")
+                    print("   💡 Or: pip install 'openai>=1.0,<2.0'")
+                
+                print("   ⚠️  AI responses will be disabled")
                 self.ai_enabled = False
+                self.openai_client = None
         else:
             print("⚠️  OpenAI API key not found. AI responses disabled.")
             print("   Add OPENAI_API_KEY to .env file to enable AI responses")
