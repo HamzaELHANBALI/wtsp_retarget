@@ -709,7 +709,8 @@ Keep responses concise and helpful."""
         self,
         phone: str,
         message: str,
-        media_path: Optional[str] = None
+        media_path: Optional[str] = None,
+        is_followup: bool = False
     ) -> bool:
         """
         Send message to a contact
@@ -718,6 +719,7 @@ Keep responses concise and helpful."""
             phone: Phone number (e.g., "+966501234567")
             message: Message text (or caption if media provided)
             media_path: Optional path to image/video file
+            is_followup: If True, allow sending even if contact is already in monitored_contacts
 
         Returns:
             True if sent successfully
@@ -746,8 +748,8 @@ Keep responses concise and helpful."""
             is_first_contact = phone not in self.monitored_contacts
             
             # If contact is already in monitored_contacts, skip sending initial offer (they've already been contacted)
-            # They will be monitored and can receive follow-ups automatically
-            if not is_first_contact:
+            # BUT allow follow-ups to be sent (is_followup=True)
+            if not is_first_contact and not is_followup:
                 print(f"   ℹ️  {phone} has already been contacted. Skipping initial offer.")
                 print(f"   💡 This contact is being monitored and will receive follow-ups if needed.")
                 return True  # Return True to indicate "success" (no error, just skipped)
@@ -2524,9 +2526,8 @@ Keep responses concise and helpful."""
                     followup_msg = self._generate_followup_message(phone)
                     
                     # Send follow-up message
-                    # Note: send_message will handle this as a regular message (not first contact)
-                    # since phone is already in monitored_contacts
-                    if self.send_message(phone, followup_msg, media_path=None):
+                    # Note: pass is_followup=True to allow sending even if contact is already in monitored_contacts
+                    if self.send_message(phone, followup_msg, media_path=None, is_followup=True):
                         self.followup_sent[phone] = True
                         # DON'T update last_contact_time - keep original contact time for tracking
                         # We update followup_sent flag to prevent sending multiple follow-ups
