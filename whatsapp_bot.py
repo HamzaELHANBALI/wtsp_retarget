@@ -630,16 +630,47 @@ Keep responses concise and helpful."""
             
             # Save to file atomically (write to temp file, then rename)
             temp_file = self.state_file.with_suffix('.tmp')
+            
+            # Ensure directory exists
+            self.state_file.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Write to temp file
             with open(temp_file, 'w', encoding='utf-8') as f:
                 json.dump(state, f, indent=2, ensure_ascii=False)
             
             # Atomic rename (works on both Unix and Windows)
             temp_file.replace(self.state_file)
             
+            # Verify file was written
+            if self.state_file.exists():
+                # Verify file has content
+                file_size = self.state_file.stat().st_size
+                if file_size > 0:
+                    print(f"💾 Bot state saved: {len(self.monitored_contacts)} contacts tracked (file size: {file_size} bytes)")
+                else:
+                    print(f"⚠️  Warning: State file is empty at {self.state_file}")
+            else:
+                print(f"⚠️  Warning: State file was not created at {self.state_file}")
+                print(f"   Attempted to write to: {temp_file}")
+            
         except Exception as e:
             print(f"⚠️  Error saving bot state: {e}")
             import traceback
             traceback.print_exc()
+            # Try to save to a backup location
+            try:
+                backup_file = Path.cwd() / "bot_state_backup.json"
+                with open(backup_file, 'w', encoding='utf-8') as f:
+                    json.dump({
+                        'monitored_contacts': self.monitored_contacts,
+                        'last_contact_time': {k: v.isoformat() if isinstance(v, datetime) else str(v) for k, v in self.last_contact_time.items()},
+                        'customer_responded': self.customer_responded,
+                        'followup_sent': self.followup_sent,
+                        'last_saved': datetime.now().isoformat()
+                    }, f, indent=2, ensure_ascii=False)
+                print(f"💾 Saved backup state to {backup_file}")
+            except Exception as backup_err:
+                print(f"❌ Failed to save backup state: {backup_err}")
 
     def _open_chat_safely(self, phone: str, force: bool = False) -> bool:
         """
@@ -714,6 +745,13 @@ Keep responses concise and helpful."""
             # Check if this is the first time we're contacting this customer (initial offer)
             is_first_contact = phone not in self.monitored_contacts
             
+            # If contact is already in monitored_contacts, skip sending initial offer (they've already been contacted)
+            # They will be monitored and can receive follow-ups automatically
+            if not is_first_contact:
+                print(f"   ℹ️  {phone} has already been contacted. Skipping initial offer.")
+                print(f"   💡 This contact is being monitored and will receive follow-ups if needed.")
+                return True  # Return True to indicate "success" (no error, just skipped)
+            
             # If this is the first contact, start monitoring BEFORE sending (clears history and marks existing messages as seen)
             # But skip opening the chat since we're already in it
             if is_first_contact:
@@ -723,8 +761,13 @@ Keep responses concise and helpful."""
                 self.last_contact_time[phone] = datetime.now()
                 self.customer_responded[phone] = False
                 self.followup_sent[phone] = False
-                # Save state after adding new contact
-                self._save_state()
+                # Save state after adding new contact (CRITICAL: must save immediately)
+                try:
+                    self._save_state()
+                except Exception as save_err:
+                    print(f"⚠️  Failed to save state after contacting {phone}: {save_err}")
+                    import traceback
+                    traceback.print_exc()
             
             # Send media if provided
             if media_path and os.path.exists(media_path):
@@ -757,6 +800,9 @@ Keep responses concise and helpful."""
                             print(f"   ✅ Auto-monitoring is already active for this contact")
                     else:
                         # This is a follow-up or AI response - add to conversation history
+                        # Initialize conversation history if it doesn't exist
+                        if phone not in self.conversations:
+                            self.conversations[phone] = []
                         self.conversations[phone].append({
                             "role": "assistant",
                             "content": message if message else f"[Media: {Path(media_path).name}]"
@@ -796,6 +842,9 @@ Keep responses concise and helpful."""
                             print(f"   ✅ Auto-monitoring is already active for this contact")
                     else:
                         # This is a follow-up or AI response - add to conversation history
+                        # Initialize conversation history if it doesn't exist
+                        if phone not in self.conversations:
+                            self.conversations[phone] = []
                         self.conversations[phone].append({
                             "role": "assistant",
                             "content": message if message else f"[Media: {Path(media_path).name}]"
@@ -836,8 +885,19 @@ Keep responses concise and helpful."""
                     self.start_auto_monitoring()
                 else:
                     print(f"   ✅ Auto-monitoring is already active for this contact")
+                
+                # Save state again after message is sent (CRITICAL: ensure state is saved)
+                try:
+                    self._save_state()
+                except Exception as save_err:
+                    print(f"⚠️  Failed to save state after sending to {phone}: {save_err}")
+                    import traceback
+                    traceback.print_exc()
             else:
                 # This is a follow-up or AI response - add to conversation history
+                # Initialize conversation history if it doesn't exist
+                if phone not in self.conversations:
+                    self.conversations[phone] = []
                 self.conversations[phone].append({
                     "role": "assistant",
                     "content": message
@@ -849,6 +909,8 @@ Keep responses concise and helpful."""
 
         except Exception as e:
             print(f"❌ Error sending to {phone}: {e}")
+            import traceback
+            traceback.print_exc()  # Print full traceback for debugging
             self.messages_failed += 1
             return False
 
