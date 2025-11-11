@@ -5,7 +5,39 @@ Demonstrates sending messages and AI auto-responses
 
 from whatsapp_bot import WhatsAppBot
 import os
+import json
 from pathlib import Path
+
+# Helper functions to load configuration from JSON files
+def load_noura_prompt():
+    """Load Noura prompt from JSON file, with fallback to default"""
+    try:
+        prompt_file = Path("noura_prompt.json")
+        if prompt_file.exists():
+            with open(prompt_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                prompt = data.get('system_prompt', '')
+                if prompt:
+                    return prompt
+        return None
+    except Exception as e:
+        print(f"⚠️ Error loading noura_prompt.json: {e}")
+        return None
+
+def load_initial_message():
+    """Load initial message template from JSON file, with fallback to default"""
+    try:
+        message_file = Path("initial_message.json")
+        if message_file.exists():
+            with open(message_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                message = data.get('message_template', '')
+                if message:
+                    return message
+        return None
+    except Exception as e:
+        print(f"⚠️ Error loading initial_message.json: {e}")
+        return None
 
 # Configuration
 CONTACTS = [
@@ -13,8 +45,11 @@ CONTACTS = [
     # Add more contacts as needed
 ]
 
-# Message to send
-MESSAGE = """السلام عليكم 👋
+# Load initial message from JSON file
+_default_message = load_initial_message()
+if _default_message is None:
+    # Fallback to hardcoded message if JSON file doesn't exist
+    MESSAGE = """السلام عليكم 👋
 
 🐯 Tiger Balm الأصلي - عرض حصري محدود!
 
@@ -37,13 +72,20 @@ MESSAGE = """السلام عليكم 👋
 ⚠️ العرض ينتهي قريباً - الكمية محدودة!
 
 تبي تستفيد من العرض؟"""
+else:
+    # Use message from JSON file (note: {name} placeholder won't be replaced in test_bot.py)
+    # You can manually replace {name} with a default value if needed
+    MESSAGE = _default_message.replace("{name}", "Customer")
 
 # Optional: Media file path
 # Set to None for text-only, or provide path to image/video
 MEDIA_FILE = "/Users/hamzaelhanbali/Desktop/personal/tiger/hamza_tiger_27_octobre_1.mp4"  # Update this path
 
-# AI System Prompt (customize for your business)
-SYSTEM_PROMPT = """
+# Load AI System Prompt from JSON file
+_default_prompt = load_noura_prompt()
+if _default_prompt is None:
+    # Fallback to hardcoded prompt if JSON file doesn't exist
+    SYSTEM_PROMPT = """
 You are Noura, a sales consultant at Tiger Balm call center in Saudi Arabia. Your mission: BUILD TRUST → ANSWER QUESTIONS → CLOSE THE SALE.
 
 ## CORE RULES
@@ -187,6 +229,9 @@ Always have it home. 90% choose 3-pack - smarter 💡 Reconsider?"
 - Add [LEAD_CONFIRMED] marker and STOP after city
 - Stay in character as helpful, knowledgeable Noura
             """
+else:
+    # Use prompt from JSON file
+    SYSTEM_PROMPT = _default_prompt
 
 
 def main():

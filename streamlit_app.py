@@ -4,6 +4,7 @@ import time
 import os
 import re
 import shutil
+import json
 from pathlib import Path
 from datetime import datetime
 import threading
@@ -60,6 +61,41 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+# Helper functions to load configuration from JSON files
+def load_noura_prompt():
+    """Load Noura prompt from JSON file, with fallback to default"""
+    try:
+        prompt_file = Path("noura_prompt.json")
+        if prompt_file.exists():
+            with open(prompt_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                prompt = data.get('system_prompt', '')
+                if prompt:
+                    return prompt
+        # If file doesn't exist or prompt is empty, return None to use fallback
+        return None
+    except Exception as e:
+        # Silently fail and return None to use fallback
+        print(f"⚠️ Error loading noura_prompt.json: {e}")
+        return None
+
+def load_initial_message():
+    """Load initial message template from JSON file, with fallback to default"""
+    try:
+        message_file = Path("initial_message.json")
+        if message_file.exists():
+            with open(message_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                message = data.get('message_template', '')
+                if message:
+                    return message
+        # If file doesn't exist or message is empty, return None to use fallback
+        return None
+    except Exception as e:
+        # Silently fail and return None to use fallback
+        print(f"⚠️ Error loading initial_message.json: {e}")
+        return None
 
 # Initialize session state
 if 'bot' not in st.session_state:
@@ -221,9 +257,11 @@ with st.sidebar:
 
     # System Prompt
     with st.expander("🤖 AI System Prompt"):
-        system_prompt = st.text_area(
-            "Customize AI Behavior",
-            value="""
+        # Load prompt from JSON file
+        default_prompt = load_noura_prompt()
+        if default_prompt is None:
+            # Fallback to hardcoded prompt if JSON file doesn't exist
+            default_prompt = """
 You are Noura, a sales consultant at Tiger Balm call center in Saudi Arabia. Your mission: BUILD TRUST → ANSWER QUESTIONS → CLOSE THE SALE.
 
 ## CORE RULES
@@ -366,9 +404,14 @@ Always have it home. 90% choose 3-pack - smarter 💡 Reconsider?"
 - Confirm package before asking city
 - Add [LEAD_CONFIRMED] marker and STOP after city
 - Stay in character as helpful, knowledgeable Noura
-            """,
-            height=200,
-            help="Define how the AI should behave when responding to customers"
+            """
+        
+        st.caption("💡 Edit noura_prompt.json to update this prompt. Changes take effect after reloading the page.")
+        system_prompt = st.text_area(
+            "Customize AI Behavior",
+            value=default_prompt.strip(),
+            height=400,
+            help="Define how the AI should behave when responding to customers. Edit noura_prompt.json to change the default."
         )
 
     # Delay Settings
@@ -554,9 +597,11 @@ with tab1:
                     key="test_name"
                 )
 
-                test_message = st.text_area(
-                    "Test Message",
-                    value="""السلام عليكم {name} 👋
+                # Load initial message from JSON file for test
+                test_default_message = load_initial_message()
+                if test_default_message is None:
+                    # Fallback to hardcoded message if JSON file doesn't exist
+                    test_default_message = """السلام عليكم {name} 👋
 
 🐯 Tiger Balm الأصلي - عرض حصري محدود!
 
@@ -578,9 +623,13 @@ with tab1:
 
 ⚠️ العرض ينتهي قريباً - الكمية محدودة!
 
-تبي تستفيد من العرض؟""",
+تبي تستفيد من العرض؟"""
+                
+                test_message = st.text_area(
+                    "Test Message",
+                    value=test_default_message,
                     height=150,
-                    help="Write your test message. Use {name} to personalize.",
+                    help="Write your test message. Use {name} to personalize. Edit initial_message.json to change the default.",
                     key="test_message"
                 )
 
@@ -843,10 +892,11 @@ with tab1:
         with col2:
             st.subheader("💬 Compose Message")
 
-            # Message template
-            message_template = st.text_area(
-                "Message Template",
-                value="""السلام عليكم {name} 👋
+            # Load initial message from JSON file
+            default_message = load_initial_message()
+            if default_message is None:
+                # Fallback to hardcoded message if JSON file doesn't exist
+                default_message = """السلام عليكم {name} 👋
 
 🐯 Tiger Balm الأصلي - عرض حصري محدود!
 
@@ -868,9 +918,15 @@ with tab1:
 
 ⚠️ العرض ينتهي قريباً - الكمية محدودة!
 
-تبي تستفيد من العرض؟""",
+تبي تستفيد من العرض؟"""
+            
+            st.caption("💡 Edit initial_message.json to update this template. Changes take effect after reloading the page.")
+            # Message template
+            message_template = st.text_area(
+                "Message Template",
+                value=default_message,
                 height=150,
-                help="Use {name}, {phone}, {custom_message} as placeholders"
+                help="Use {name}, {phone}, {custom_message} as placeholders. Edit initial_message.json to change the default."
             )
 
             # Media upload

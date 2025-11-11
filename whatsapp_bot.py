@@ -2377,7 +2377,7 @@ Keep responses concise and helpful."""
                 print("   💡 Or manually set time in System Settings → Date & Time", flush=True)
                 sys.stdout.flush()
                 # Return a helpful message in Arabic/English
-                return "شكراً لك على رسالتك! سنتواصل معك قريباً. (Thank you for your message! We'll contact you soon.)"
+                return "شكراً لك على رسالتك! سنتواصل معك قريباً."
             
             print(f"⚠️  AI response error: {e}", flush=True)
             sys.stdout.flush()
