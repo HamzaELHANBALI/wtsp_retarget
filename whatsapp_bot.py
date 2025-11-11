@@ -789,10 +789,15 @@ Keep responses concise and helpful."""
             if media_path and os.path.exists(media_path):
                 # If this is the first contact, store media to send later (after customer responds)
                 if is_first_contact:
-                    # Store media for later sending
-                    self.pending_media[phone] = media_path
+                    # Convert to absolute path to ensure file can be found later
+                    # This is important because the bot might be restarted from a different directory
+                    media_abs_path = str(Path(media_path).absolute())
+                    
+                    # Store absolute path for later sending
+                    self.pending_media[phone] = media_abs_path
                     self.media_sent_after_response[phone] = False
                     print(f"   📎 Media stored for {phone} - will be sent after customer responds")
+                    print(f"   📁 Media path: {media_abs_path}")
                     # Save state to persist pending media
                     try:
                         self._save_state()
@@ -2663,8 +2668,12 @@ Keep responses concise and helpful."""
                                 pending_media_path = self.pending_media[phone]
                                 # Check if media hasn't been sent yet
                                 if not self.media_sent_after_response.get(phone, False):
+                                    # Ensure path is absolute (in case it was stored as relative)
+                                    pending_media_path = str(Path(pending_media_path).absolute())
+                                    
                                     if os.path.exists(pending_media_path):
                                         print(f"   📎 Sending pending media to {phone}...")
+                                        print(f"   📁 Media file: {Path(pending_media_path).name}")
                                         # Open chat for this contact (required for sending media)
                                         if self._open_chat_safely(phone):
                                             # Send media with empty caption
@@ -2688,6 +2697,7 @@ Keep responses concise and helpful."""
                                             print(f"   ⚠️  Failed to open chat for {phone} - cannot send media")
                                     else:
                                         print(f"   ⚠️  Pending media file not found: {pending_media_path}")
+                                        print(f"   💡 Make sure the media file exists and wasn't deleted")
                                         # Remove invalid pending media
                                         del self.pending_media[phone]
                                         self._save_state()
