@@ -48,33 +48,10 @@ CONTACTS = [
 # Load initial message from JSON file
 _default_message = load_initial_message()
 if _default_message is None:
-    # Fallback to hardcoded message if JSON file doesn't exist
-    MESSAGE = """السلام عليكم 👋
-
-🐯 Tiger Balm الأصلي - عرض حصري محدود!
-
-🔥 عرضين استثنائيين:
-   1️⃣ حبة وحدة → 89 ريال
-   2️⃣ عرض العائلة (3 حبات) → 149 ريال بس!
-
-💡 يعني كل حبة بـ50 ريال (توفير 118 ريال!)
-
-✨ مميزات الطلب:
-✅ دفع عند الاستلام (COD)
-✅ توصيل 24-48 ساعة لبابك
-✅ منتج أصلي 100% مضمون
-
-مناسب لـ:
-• آلام الظهر والرقبة
-• الصداع والشقيقة
-• آلام العضلات والمفاصل
-
-⚠️ العرض ينتهي قريباً - الكمية محدودة!
-
-تبي تستفيد من العرض؟"""
+    # Fallback to hardcoded message if JSON file doesn't exist (matches initial_message.json format)
+    MESSAGE = "السلام عليكم Customer 👋 كيف حالك؟"
 else:
-    # Use message from JSON file (note: {name} placeholder won't be replaced in test_bot.py)
-    # You can manually replace {name} with a default value if needed
+    # Use message from JSON file - replace {name} placeholder with "Customer" for testing
     MESSAGE = _default_message.replace("{name}", "Customer")
 
 # Optional: Media file path
@@ -244,11 +221,22 @@ def main():
     print(f"   Contacts: {len(CONTACTS)}")
     print(f"   Media: {'Yes' if MEDIA_FILE else 'No'}")
     print(f"   AI: Enabled (if API key configured)")
+    print(f"   Initial Message: Loaded from initial_message.json" if _default_message else "   Initial Message: Using fallback")
+    print(f"   System Prompt: Loaded from noura_prompt.json" if _default_prompt else "   System Prompt: Using fallback")
+    print(f"   Follow-up Message: Loaded automatically from followup_message.json (if enabled)")
     print("\n" + "="*60 + "\n")
 
     # Initialize bot
+    # Note: Follow-up messages are automatically loaded from followup_message.json
+    # The bot will use the JSON file if it exists, otherwise it will use the default
     try:
         bot = WhatsAppBot(system_prompt=SYSTEM_PROMPT)
+        # Configure follow-up settings (optional - defaults are in WhatsAppBot)
+        # bot.followup_enabled = True  # Enable follow-ups (default: True)
+        # bot.followup_delay_minutes = 60  # Delay before follow-up in minutes (default: 60)
+        print("✅ Bot initialized successfully")
+        print(f"   Follow-up enabled: {bot.followup_enabled}")
+        print(f"   Follow-up delay: {bot.followup_delay_minutes} minutes")
     except Exception as e:
         print(f"❌ Failed to initialize bot: {e}")
         return
@@ -288,6 +276,8 @@ def main():
         print("   - Check for incoming messages every 10 seconds")
         print("   - Automatically respond using AI")
         print("   - Maintain conversation context per contact")
+        if bot.followup_enabled:
+            print(f"   - Send follow-up messages after {bot.followup_delay_minutes} minutes if no response")
         print("\n   Press Ctrl+C to stop monitoring\n")
         print("="*60 + "\n")
 

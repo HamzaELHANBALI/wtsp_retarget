@@ -97,6 +97,23 @@ def load_initial_message():
         print(f"⚠️ Error loading initial_message.json: {e}")
         return None
 
+def load_followup_message():
+    """Load follow-up message template from JSON file, with fallback to default"""
+    try:
+        message_file = Path("followup_message.json")
+        if message_file.exists():
+            with open(message_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                message = data.get('message_template', '')
+                if message:
+                    return message
+        # If file doesn't exist or message is empty, return None to use fallback
+        return None
+    except Exception as e:
+        # Silently fail and return None to use fallback
+        print(f"⚠️ Error loading followup_message.json: {e}")
+        return None
+
 # Initialize session state
 if 'bot' not in st.session_state:
     st.session_state.bot = None
@@ -459,20 +476,31 @@ Always have it home. 90% choose 3-pack - smarter 💡 Reconsider?"
             else:
                 st.caption(f"⏱️ Follow-up will be sent after {followup_delay_minutes} minute(s)")
             
+            # Load follow-up message from JSON file
+            default_followup = load_followup_message()
+            if default_followup is None:
+                # Fallback to hardcoded message if JSON file doesn't exist
+                default_followup = """مرحباً {name}! 👋
+
+نشكرك على وقتك. نود أن نتأكد أنك رأيت عرضنا على Tiger Balm.
+
+هل لديك أي أسئلة؟ نحن هنا للمساعدة! 💬"""
+            
             # Custom follow-up message
             st.markdown("**Custom Follow-up Message (Optional)**")
+            st.caption("💡 Edit followup_message.json to update the default. Leave empty to use default from JSON.")
             custom_followup = st.text_area(
                 "Follow-up Message Template",
                 value="",
                 height=100,
-                placeholder="Leave empty to use default message...",
-                help="Custom message to send as follow-up. Leave empty to use default."
+                placeholder=f"Leave empty to use default from followup_message.json:\n\n{default_followup[:100]}...",
+                help="Custom message to send as follow-up. Leave empty to use default from followup_message.json. Use {name} and {phone} as placeholders."
             )
             
             if custom_followup:
                 st.caption("✅ Custom follow-up message will be used")
             else:
-                st.caption("ℹ️ Default follow-up message will be used")
+                st.caption(f"ℹ️ Default follow-up message from followup_message.json will be used")
         else:
             followup_delay_minutes = 60  # Default value
             custom_followup = ""

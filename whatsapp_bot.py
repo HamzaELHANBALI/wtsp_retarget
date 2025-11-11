@@ -181,7 +181,9 @@ Keep responses concise and helpful."""
         self.followup_sent: Dict[str, bool] = {}  # Whether we already sent a follow-up
         self.followup_enabled = True  # Enable/disable follow-up feature
         self.followup_delay_minutes = 60  # Default: 60 minutes (1 hour) before follow-up
-        self.followup_message_template = None  # Custom follow-up message (None = use default)
+        self.followup_message_template = None  # Custom follow-up message (None = use default from JSON)
+        # Load default follow-up message from JSON file
+        self.default_followup_template = self._load_followup_message_from_json()
         
         # Automatic monitoring
         self.auto_monitoring_active = False
@@ -2442,6 +2444,21 @@ Keep responses concise and helpful."""
         except Exception as e:
             print(f"⚠️  Error starting monitoring for {phone}: {e}")
 
+    def _load_followup_message_from_json(self) -> Optional[str]:
+        """Load follow-up message template from JSON file, with fallback to default"""
+        try:
+            message_file = Path("followup_message.json")
+            if message_file.exists():
+                with open(message_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    message = data.get('message_template', '')
+                    if message:
+                        return message
+            return None
+        except Exception as e:
+            print(f"⚠️ Error loading followup_message.json: {e}")
+            return None
+
     def _generate_followup_message(self, phone: str) -> str:
         """
         Generate a follow-up message for a customer who didn't respond.
@@ -2467,7 +2484,7 @@ Keep responses concise and helpful."""
             except Exception:
                 pass  # Use default name if lookup fails
         
-        # Use custom template if provided, otherwise use default
+        # Use custom template if provided, otherwise use default from JSON or fallback
         if self.followup_message_template:
             # Replace placeholders
             message = self.followup_message_template
@@ -2475,7 +2492,14 @@ Keep responses concise and helpful."""
             message = message.replace('{phone}', phone)
             return message
         
-        # Default follow-up message (Arabic only)
+        # Use default from JSON file if available
+        if self.default_followup_template:
+            message = self.default_followup_template
+            message = message.replace('{name}', customer_name)
+            message = message.replace('{phone}', phone)
+            return message
+        
+        # Fallback to hardcoded default (should not happen if JSON exists)
         default_followup = f"""مرحباً {customer_name}! 👋
 
 نشكرك على وقتك. نود أن نتأكد أنك رأيت عرضنا على Tiger Balm.
