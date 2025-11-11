@@ -67,11 +67,11 @@ def load_noura_prompt(prompt_file_name=None):
     """Load Noura prompt from JSON file, with fallback to default
     
     Args:
-        prompt_file_name: Name of the prompt file to load (e.g., 'noura_prompt.json', 'noura_electric_ashtray_prompt.json')
-                         If None, tries default files in order: noura_electric_ashtray_prompt.json, noura_prompt.json
+        prompt_file_name: Name of the prompt file to load (e.g., 'noura_prompt.json', 'noura_lighter_watch_bundle_prompt.json')
+                         If None, tries default files in order: noura_lighter_watch_bundle_prompt.json, noura_electric_ashtray_prompt.json, noura_prompt.json
     """
-    # Default priority: electric ashtray (new default), then tiger balm (old)
-    default_files = ["noura_electric_ashtray_prompt.json", "noura_prompt.json"]
+    # Default priority: lighter watch bundle (new default), then electric ashtray, then tiger balm (old)
+    default_files = ["noura_lighter_watch_bundle_prompt.json", "noura_electric_ashtray_prompt.json", "noura_prompt.json"]
     
     files_to_try = [prompt_file_name] if prompt_file_name else default_files
     
@@ -98,8 +98,12 @@ def list_available_prompt_files():
     for file in Path(".").glob("noura*_prompt.json"):
         if file.is_file():
             prompt_files.append(file.name)
-    # Sort to have electric ashtray first (default)
-    prompt_files.sort(key=lambda x: (x != "noura_electric_ashtray_prompt.json", x))
+    # Sort to have lighter watch bundle first (default), then electric ashtray
+    prompt_files.sort(key=lambda x: (
+        x != "noura_lighter_watch_bundle_prompt.json",
+        x != "noura_electric_ashtray_prompt.json",
+        x
+    ))
     return prompt_files
 
 def load_initial_message():
@@ -301,8 +305,8 @@ with st.sidebar:
         
         # Initialize selected_prompt_file in session state if not exists
         if 'selected_prompt_file' not in st.session_state:
-            # Default to electric ashtray if available
-            default_prompt_file = "noura_electric_ashtray_prompt.json"
+            # Default to lighter watch bundle if available
+            default_prompt_file = "noura_lighter_watch_bundle_prompt.json"
             if default_prompt_file in available_prompts:
                 st.session_state.selected_prompt_file = default_prompt_file
             elif available_prompts:
@@ -492,7 +496,7 @@ Always have it home. 90% choose 3-pack - smarter 💡 Reconsider?"
         if current_prompt_file:
             st.caption(f"💡 Edit {current_prompt_file} to update this prompt. Changes take effect after reloading the page.")
         else:
-            st.caption("💡 Create a prompt JSON file (e.g., noura_electric_ashtray_prompt.json) to customize. Changes take effect after reloading.")
+            st.caption("💡 Create a prompt JSON file (e.g., noura_lighter_watch_bundle_prompt.json) to customize. Changes take effect after reloading.")
         
         system_prompt = st.text_area(
             "Customize AI Behavior",

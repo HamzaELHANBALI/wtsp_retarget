@@ -13,11 +13,11 @@ def load_noura_prompt(prompt_file_name=None):
     """Load Noura prompt from JSON file, with fallback to default
     
     Args:
-        prompt_file_name: Name of the prompt file to load (e.g., 'noura_prompt.json', 'noura_electric_ashtray_prompt.json')
-                         If None, tries default files in order: noura_electric_ashtray_prompt.json, noura_prompt.json
+        prompt_file_name: Name of the prompt file to load (e.g., 'noura_prompt.json', 'noura_lighter_watch_bundle_prompt.json')
+                         If None, tries default files in order: noura_lighter_watch_bundle_prompt.json, noura_electric_ashtray_prompt.json, noura_prompt.json
     """
-    # Default priority: electric ashtray (new default), then tiger balm (old)
-    default_files = ["noura_electric_ashtray_prompt.json", "noura_prompt.json"]
+    # Default priority: lighter watch bundle (new default), then electric ashtray, then tiger balm (old)
+    default_files = ["noura_lighter_watch_bundle_prompt.json", "noura_electric_ashtray_prompt.json", "noura_prompt.json"]
     
     files_to_try = [prompt_file_name] if prompt_file_name else default_files
     
@@ -44,8 +44,12 @@ def list_available_prompt_files():
     for file in Path(".").glob("noura*_prompt.json"):
         if file.is_file():
             prompt_files.append(file.name)
-    # Sort to have electric ashtray first (default)
-    prompt_files.sort(key=lambda x: (x != "noura_electric_ashtray_prompt.json", x))
+    # Sort to have lighter watch bundle first (default), then electric ashtray
+    prompt_files.sort(key=lambda x: (
+        x != "noura_lighter_watch_bundle_prompt.json",
+        x != "noura_electric_ashtray_prompt.json",
+        x
+    ))
     return prompt_files
 
 def load_initial_message():
@@ -82,9 +86,9 @@ else:
 # Set to None for text-only, or provide path to image/video
 MEDIA_FILE = "/Users/hamzaelhanbali/Desktop/personal/tiger/hamza_tiger_27_octobre_1.mp4"  # Update this path
 
-# Load AI System Prompt from JSON file (defaults to electric ashtray)
+# Load AI System Prompt from JSON file (defaults to lighter watch bundle)
 # Change prompt_file_name to use a different prompt file
-prompt_file_name = None  # None = use default (electric ashtray), or specify: "noura_prompt.json"
+prompt_file_name = None  # None = use default (lighter watch bundle), or specify: "noura_electric_ashtray_prompt.json"
 _default_prompt = load_noura_prompt(prompt_file_name)
 if _default_prompt is None:
     # Fallback to hardcoded prompt if JSON file doesn't exist
@@ -249,7 +253,7 @@ def main():
     print(f"   AI: Enabled (if API key configured)")
     # List available prompts
     available_prompts = list_available_prompt_files()
-    prompt_source = prompt_file_name if prompt_file_name else ("noura_electric_ashtray_prompt.json" if "noura_electric_ashtray_prompt.json" in available_prompts else ("noura_prompt.json" if "noura_prompt.json" in available_prompts else "default"))
+    prompt_source = prompt_file_name if prompt_file_name else ("noura_lighter_watch_bundle_prompt.json" if "noura_lighter_watch_bundle_prompt.json" in available_prompts else ("noura_electric_ashtray_prompt.json" if "noura_electric_ashtray_prompt.json" in available_prompts else ("noura_prompt.json" if "noura_prompt.json" in available_prompts else "default")))
     
     print(f"   Initial Message: Loaded from initial_message.json" if _default_message else "   Initial Message: Using fallback")
     print(f"   System Prompt: Loaded from {prompt_source}" if _default_prompt else "   System Prompt: Using fallback")
