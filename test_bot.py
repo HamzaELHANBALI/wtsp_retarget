@@ -9,20 +9,44 @@ import json
 from pathlib import Path
 
 # Helper functions to load configuration from JSON files
-def load_noura_prompt():
-    """Load Noura prompt from JSON file, with fallback to default"""
-    try:
-        prompt_file = Path("noura_prompt.json")
-        if prompt_file.exists():
-            with open(prompt_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                prompt = data.get('system_prompt', '')
-                if prompt:
-                    return prompt
-        return None
-    except Exception as e:
-        print(f"⚠️ Error loading noura_prompt.json: {e}")
-        return None
+def load_noura_prompt(prompt_file_name=None):
+    """Load Noura prompt from JSON file, with fallback to default
+    
+    Args:
+        prompt_file_name: Name of the prompt file to load (e.g., 'noura_prompt.json', 'noura_electric_ashtray_prompt.json')
+                         If None, tries default files in order: noura_electric_ashtray_prompt.json, noura_prompt.json
+    """
+    # Default priority: electric ashtray (new default), then tiger balm (old)
+    default_files = ["noura_electric_ashtray_prompt.json", "noura_prompt.json"]
+    
+    files_to_try = [prompt_file_name] if prompt_file_name else default_files
+    
+    for filename in files_to_try:
+        try:
+            prompt_file = Path(filename)
+            if prompt_file.exists():
+                with open(prompt_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    prompt = data.get('system_prompt', '')
+                    if prompt:
+                        return prompt
+        except Exception as e:
+            # Continue to next file if this one fails
+            print(f"⚠️ Error loading {filename}: {e}")
+            continue
+    
+    # If no file found or all failed, return None to use fallback
+    return None
+
+def list_available_prompt_files():
+    """List all available prompt JSON files in the current directory"""
+    prompt_files = []
+    for file in Path(".").glob("noura*_prompt.json"):
+        if file.is_file():
+            prompt_files.append(file.name)
+    # Sort to have electric ashtray first (default)
+    prompt_files.sort(key=lambda x: (x != "noura_electric_ashtray_prompt.json", x))
+    return prompt_files
 
 def load_initial_message():
     """Load initial message template from JSON file, with fallback to default"""
@@ -58,8 +82,10 @@ else:
 # Set to None for text-only, or provide path to image/video
 MEDIA_FILE = "/Users/hamzaelhanbali/Desktop/personal/tiger/hamza_tiger_27_octobre_1.mp4"  # Update this path
 
-# Load AI System Prompt from JSON file
-_default_prompt = load_noura_prompt()
+# Load AI System Prompt from JSON file (defaults to electric ashtray)
+# Change prompt_file_name to use a different prompt file
+prompt_file_name = None  # None = use default (electric ashtray), or specify: "noura_prompt.json"
+_default_prompt = load_noura_prompt(prompt_file_name)
 if _default_prompt is None:
     # Fallback to hardcoded prompt if JSON file doesn't exist
     SYSTEM_PROMPT = """
@@ -221,8 +247,13 @@ def main():
     print(f"   Contacts: {len(CONTACTS)}")
     print(f"   Media: {'Yes' if MEDIA_FILE else 'No'}")
     print(f"   AI: Enabled (if API key configured)")
+    # List available prompts
+    available_prompts = list_available_prompt_files()
+    prompt_source = prompt_file_name if prompt_file_name else ("noura_electric_ashtray_prompt.json" if "noura_electric_ashtray_prompt.json" in available_prompts else ("noura_prompt.json" if "noura_prompt.json" in available_prompts else "default"))
+    
     print(f"   Initial Message: Loaded from initial_message.json" if _default_message else "   Initial Message: Using fallback")
-    print(f"   System Prompt: Loaded from noura_prompt.json" if _default_prompt else "   System Prompt: Using fallback")
+    print(f"   System Prompt: Loaded from {prompt_source}" if _default_prompt else "   System Prompt: Using fallback")
+    print(f"   Available prompt files: {', '.join(available_prompts) if available_prompts else 'None'}")
     print(f"   Follow-up Message: Loaded automatically from followup_message.json (if enabled)")
     print("\n" + "="*60 + "\n")
 

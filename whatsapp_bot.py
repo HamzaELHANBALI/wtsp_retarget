@@ -185,6 +185,10 @@ Keep responses concise and helpful."""
         # Load default follow-up message from JSON file
         self.default_followup_template = self._load_followup_message_from_json()
         
+        # Pending media tracking (media to send after customer responds)
+        self.pending_media: Dict[str, str] = {}  # {phone: media_path} - Media to send after first customer response
+        self.media_sent_after_response: Dict[str, bool] = {}  # Track if media was already sent after response
+        
         # Automatic monitoring
         self.auto_monitoring_active = False
         self.monitoring_thread: Optional[threading.Thread] = None
@@ -579,6 +583,10 @@ Keep responses concise and helpful."""
                 # Load follow-up status
                 self.followup_sent = state.get('followup_sent', {})
                 
+                # Load pending media (media to send after customer responds)
+                self.pending_media = state.get('pending_media', {})
+                self.media_sent_after_response = state.get('media_sent_after_response', {})
+                
                 # Load seen message IDs and texts (convert lists back to sets)
                 seen_message_ids_dict = state.get('seen_message_ids', {})
                 self.seen_message_ids = {
@@ -625,6 +633,8 @@ Keep responses concise and helpful."""
                 'last_contact_time': last_contact_times_iso,
                 'customer_responded': self.customer_responded,
                 'followup_sent': self.followup_sent,
+                'pending_media': self.pending_media,
+                'media_sent_after_response': self.media_sent_after_response,
                 'seen_message_ids': seen_message_ids_dict,
                 'seen_message_texts': seen_message_texts_dict,
                 'last_saved': datetime.now().isoformat()
@@ -773,94 +783,61 @@ Keep responses concise and helpful."""
                     import traceback
                     traceback.print_exc()
             
-            # Send media if provided
+            # Handle media sending logic
+            # NEW FEATURE: On first contact, store media to send after customer responds
+            # On subsequent messages (follow-ups, AI responses), send media immediately
             if media_path and os.path.exists(media_path):
-                media_result = self._send_media(media_path, message)
-                if media_result:
-                    # Media sent successfully
-                    print(f"✅ Message with media sent to {phone}")
-                    self.messages_sent += 1
-                    
-                    # If this is the first contact, add offer message to conversation history
-                    # (History was already cleared in start_monitoring_contact above)
-                    if is_first_contact:
-                        # Add our offer message (caption if media, or full message) as assistant message
-                        self.conversations[phone].append({
-                            "role": "assistant",
-                            "content": message if message else f"[Media: {Path(media_path).name}]"
-                        })
-                        print(f"   Added offer message to conversation history for {phone}")
-                        
-                        # Track contact time for follow-up (only set if not already set)
-                        if phone not in self.last_contact_time:
-                            self.last_contact_time[phone] = datetime.now()
-                            self.customer_responded[phone] = False
-                            self.followup_sent[phone] = False
-                        
-                        # Automatically start background monitoring if not already running
-                        if not self.auto_monitoring_active:
-                            self.start_auto_monitoring()
-                        else:
-                            print(f"   ✅ Auto-monitoring is already active for this contact")
-                    else:
-                        # This is a follow-up or AI response - add to conversation history
-                        # Initialize conversation history if it doesn't exist
-                        if phone not in self.conversations:
-                            self.conversations[phone] = []
-                        self.conversations[phone].append({
-                            "role": "assistant",
-                            "content": message if message else f"[Media: {Path(media_path).name}]"
-                        })
-                    # If already in monitoring, this is an AI response - don't modify history
-                    # (History is already managed in generate_ai_response)
-                    
-                    return True
+                # If this is the first contact, store media to send later (after customer responds)
+                if is_first_contact:
+                    # Store media for later sending
+                    self.pending_media[phone] = media_path
+                    self.media_sent_after_response[phone] = False
+                    print(f"   📎 Media stored for {phone} - will be sent after customer responds")
+                    # Save state to persist pending media
+                    try:
+                        self._save_state()
+                    except Exception as save_err:
+                        print(f"⚠️  Failed to save state after storing pending media: {save_err}")
+                    # Continue to send text message only (no media)
+                    # Fall through to text-only sending below
                 else:
-                    # Media send had issues, but might have still sent
-                    # Check if we should fall back to text
-                    print("⚠️  Media verification uncertain - message may have been sent")
-                    print("💡 Skipping text fallback to avoid duplicate messages")
-                    # Mark as sent anyway - user can check WhatsApp
-                    self.messages_sent += 1
-                    
-                    # If this is the first contact, add offer message to conversation history
-                    # (History was already cleared in start_monitoring_contact above)
-                    if is_first_contact:
-                        # Add our offer message as assistant message
-                        self.conversations[phone].append({
-                            "role": "assistant",
-                            "content": message if message else f"[Media: {Path(media_path).name}]"
-                        })
-                        print(f"   Added offer message to conversation history for {phone}")
+                    # Not first contact - send media immediately (follow-up or AI response)
+                    media_result = self._send_media(media_path, message)
+                    if media_result:
+                        # Media sent successfully
+                        print(f"✅ Message with media sent to {phone}")
+                        self.messages_sent += 1
                         
-                        # Track contact time for follow-up (only set if not already set)
-                        if phone not in self.last_contact_time:
-                            self.last_contact_time[phone] = datetime.now()
-                            self.customer_responded[phone] = False
-                            self.followup_sent[phone] = False
-                        
-                        # Automatically start background monitoring if not already running
-                        if not self.auto_monitoring_active:
-                            self.start_auto_monitoring()
-                        else:
-                            print(f"   ✅ Auto-monitoring is already active for this contact")
-                    else:
-                        # This is a follow-up or AI response - add to conversation history
-                        # Initialize conversation history if it doesn't exist
+                        # Add to conversation history (for follow-up or AI response)
                         if phone not in self.conversations:
                             self.conversations[phone] = []
                         self.conversations[phone].append({
                             "role": "assistant",
                             "content": message if message else f"[Media: {Path(media_path).name}]"
                         })
-                    # If already in monitoring, this is an AI response - don't modify history
-                    
-                    return True
-            else:
-                # No media - send text only
-                if not self._send_text(message):
-                    self.messages_failed += 1
-                    return False
+                        
+                        return True
+                    else:
+                        # Media send had issues, but might have still sent
+                        print("⚠️  Media verification uncertain - message may have been sent")
+                        print("💡 Skipping text fallback to avoid duplicate messages")
+                        # Mark as sent anyway - user can check WhatsApp
+                        self.messages_sent += 1
+                        
+                        # Add to conversation history
+                        if phone not in self.conversations:
+                            self.conversations[phone] = []
+                        self.conversations[phone].append({
+                            "role": "assistant",
+                            "content": message if message else f"[Media: {Path(media_path).name}]"
+                        })
+                        
+                        return True
+            
+            # Send text message (either no media, or media stored for later on first contact)
+            if not self._send_text(message):
+                self.messages_failed += 1
+                return False
 
             # Verify sent
             time.sleep(2)
@@ -2673,12 +2650,50 @@ Keep responses concise and helpful."""
                             print(f"   Customer: {new_msg[:100]}...")
                             
                             # Mark customer as responded (for follow-up tracking)
+                            is_first_response = False
                             if phone in self.last_contact_time:
+                                # Check if this is the first response from this customer
+                                is_first_response = not self.customer_responded.get(phone, False)
                                 self.customer_responded[phone] = True
                                 # Reset follow-up flag since customer responded
                                 self.followup_sent[phone] = False
-                                # Save state after customer responds
-                                self._save_state()
+                            
+                            # NEW FEATURE: Send pending media after customer's first response
+                            if is_first_response and phone in self.pending_media:
+                                pending_media_path = self.pending_media[phone]
+                                # Check if media hasn't been sent yet
+                                if not self.media_sent_after_response.get(phone, False):
+                                    if os.path.exists(pending_media_path):
+                                        print(f"   📎 Sending pending media to {phone}...")
+                                        # Open chat for this contact (required for sending media)
+                                        if self._open_chat_safely(phone):
+                                            # Send media with empty caption
+                                            # The original message was already sent, so we send media separately
+                                            media_sent = self._send_media(pending_media_path, "")
+                                            if media_sent:
+                                                self.media_sent_after_response[phone] = True
+                                                print(f"   ✅ Pending media sent successfully to {phone}")
+                                                # Add media reference to conversation history
+                                                if phone not in self.conversations:
+                                                    self.conversations[phone] = []
+                                                self.conversations[phone].append({
+                                                    "role": "assistant",
+                                                    "content": f"[Media sent: {Path(pending_media_path).name}]"
+                                                })
+                                                # Save state after sending media
+                                                self._save_state()
+                                            else:
+                                                print(f"   ⚠️  Failed to send pending media to {phone}")
+                                        else:
+                                            print(f"   ⚠️  Failed to open chat for {phone} - cannot send media")
+                                    else:
+                                        print(f"   ⚠️  Pending media file not found: {pending_media_path}")
+                                        # Remove invalid pending media
+                                        del self.pending_media[phone]
+                                        self._save_state()
+                            
+                            # Save state after customer responds
+                            self._save_state()
                             
                             # Generate AI response
                             if self.ai_enabled:

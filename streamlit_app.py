@@ -63,22 +63,44 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Helper functions to load configuration from JSON files
-def load_noura_prompt():
-    """Load Noura prompt from JSON file, with fallback to default"""
-    try:
-        prompt_file = Path("noura_prompt.json")
-        if prompt_file.exists():
-            with open(prompt_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                prompt = data.get('system_prompt', '')
-                if prompt:
-                    return prompt
-        # If file doesn't exist or prompt is empty, return None to use fallback
-        return None
-    except Exception as e:
-        # Silently fail and return None to use fallback
-        print(f"⚠️ Error loading noura_prompt.json: {e}")
-        return None
+def load_noura_prompt(prompt_file_name=None):
+    """Load Noura prompt from JSON file, with fallback to default
+    
+    Args:
+        prompt_file_name: Name of the prompt file to load (e.g., 'noura_prompt.json', 'noura_electric_ashtray_prompt.json')
+                         If None, tries default files in order: noura_electric_ashtray_prompt.json, noura_prompt.json
+    """
+    # Default priority: electric ashtray (new default), then tiger balm (old)
+    default_files = ["noura_electric_ashtray_prompt.json", "noura_prompt.json"]
+    
+    files_to_try = [prompt_file_name] if prompt_file_name else default_files
+    
+    for filename in files_to_try:
+        try:
+            prompt_file = Path(filename)
+            if prompt_file.exists():
+                with open(prompt_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    prompt = data.get('system_prompt', '')
+                    if prompt:
+                        return prompt
+        except Exception as e:
+            # Continue to next file if this one fails
+            print(f"⚠️ Error loading {filename}: {e}")
+            continue
+    
+    # If no file found or all failed, return None to use fallback
+    return None
+
+def list_available_prompt_files():
+    """List all available prompt JSON files in the current directory"""
+    prompt_files = []
+    for file in Path(".").glob("noura*_prompt.json"):
+        if file.is_file():
+            prompt_files.append(file.name)
+    # Sort to have electric ashtray first (default)
+    prompt_files.sort(key=lambda x: (x != "noura_electric_ashtray_prompt.json", x))
+    return prompt_files
 
 def load_initial_message():
     """Load initial message template from JSON file, with fallback to default"""
@@ -274,8 +296,51 @@ with st.sidebar:
 
     # System Prompt
     with st.expander("🤖 AI System Prompt"):
-        # Load prompt from JSON file
-        default_prompt = load_noura_prompt()
+        # List available prompt files
+        available_prompts = list_available_prompt_files()
+        
+        # Initialize selected_prompt_file in session state if not exists
+        if 'selected_prompt_file' not in st.session_state:
+            # Default to electric ashtray if available
+            default_prompt_file = "noura_electric_ashtray_prompt.json"
+            if default_prompt_file in available_prompts:
+                st.session_state.selected_prompt_file = default_prompt_file
+            elif available_prompts:
+                st.session_state.selected_prompt_file = available_prompts[0]
+            else:
+                st.session_state.selected_prompt_file = None
+        
+        # Prompt file selection
+        if available_prompts:
+            st.markdown("**Select Prompt File**")
+            # Get display names (without extension, more readable)
+            prompt_options = {f: f.replace("noura_", "").replace("_prompt.json", "").replace("_", " ").title() 
+                            for f in available_prompts}
+            # Find current index
+            current_file = st.session_state.selected_prompt_file
+            if current_file in available_prompts:
+                default_index = available_prompts.index(current_file)
+            else:
+                default_index = 0 if available_prompts else 0
+            
+            selected_prompt_file = st.selectbox(
+                "Prompt File",
+                options=available_prompts,
+                index=default_index,
+                format_func=lambda x: prompt_options.get(x, x),
+                help="Select which prompt file to use. Edit the JSON file to modify the prompt.",
+                key="prompt_file_selector"
+            )
+            # Update session state
+            st.session_state.selected_prompt_file = selected_prompt_file
+            st.caption(f"📄 Using: {selected_prompt_file}")
+        else:
+            st.session_state.selected_prompt_file = None
+            st.warning("⚠️ No prompt files found. Using default prompt.")
+        
+        # Load prompt from selected JSON file
+        prompt_to_load = st.session_state.selected_prompt_file if st.session_state.selected_prompt_file else None
+        default_prompt = load_noura_prompt(prompt_to_load)
         if default_prompt is None:
             # Fallback to hardcoded prompt if JSON file doesn't exist
             default_prompt = """
@@ -423,13 +488,60 @@ Always have it home. 90% choose 3-pack - smarter 💡 Reconsider?"
 - Stay in character as helpful, knowledgeable Noura
             """
         
-        st.caption("💡 Edit noura_prompt.json to update this prompt. Changes take effect after reloading the page.")
+        current_prompt_file = st.session_state.selected_prompt_file if 'selected_prompt_file' in st.session_state else None
+        if current_prompt_file:
+            st.caption(f"💡 Edit {current_prompt_file} to update this prompt. Changes take effect after reloading the page.")
+        else:
+            st.caption("💡 Create a prompt JSON file (e.g., noura_electric_ashtray_prompt.json) to customize. Changes take effect after reloading.")
+        
         system_prompt = st.text_area(
             "Customize AI Behavior",
-            value=default_prompt.strip(),
+            value=default_prompt.strip() if default_prompt else "",
             height=400,
-            help="Define how the AI should behave when responding to customers. Edit noura_prompt.json to change the default."
+            help=f"Define how the AI should behave when responding to customers. Edit {current_prompt_file if current_prompt_file else 'prompt JSON file'} to change the default."
         )
+        
+        # File upload option to import new prompt
+        st.markdown("**📥 Import Prompt File (Optional)**")
+        uploaded_prompt = st.file_uploader(
+            "Upload a prompt JSON file",
+            type=['json'],
+            help="Upload a new prompt JSON file. It will be saved to the project directory.",
+            key="prompt_uploader"
+        )
+        
+        if uploaded_prompt is not None:
+            try:
+                # Read uploaded file
+                content = uploaded_prompt.read().decode('utf-8')
+                data = json.loads(content)
+                
+                # Validate it has system_prompt
+                if 'system_prompt' in data:
+                    # Save to project directory
+                    uploaded_filename = uploaded_prompt.name
+                    # Ensure it follows naming convention
+                    if not uploaded_filename.endswith('_prompt.json'):
+                        if uploaded_filename.endswith('.json'):
+                            uploaded_filename = uploaded_filename.replace('.json', '_prompt.json')
+                        else:
+                            uploaded_filename = f"noura_{uploaded_filename}_prompt.json"
+                    
+                    save_path = Path(uploaded_filename)
+                    with open(save_path, 'w', encoding='utf-8') as f:
+                        json.dump(data, f, ensure_ascii=False, indent=2)
+                    st.success(f"✅ Prompt file saved: {uploaded_filename}")
+                    
+                    # Update session state to use the new file
+                    st.session_state.selected_prompt_file = uploaded_filename
+                    st.info("🔄 Please reload the page to use the new prompt file.")
+                    st.rerun()
+                else:
+                    st.error("❌ Invalid prompt file. Must contain 'system_prompt' key.")
+            except json.JSONDecodeError as e:
+                st.error(f"❌ Invalid JSON file: {e}")
+            except Exception as e:
+                st.error(f"❌ Error importing prompt file: {e}")
 
     # Delay Settings
     with st.expander("⏱️ Rate Limiting"):
