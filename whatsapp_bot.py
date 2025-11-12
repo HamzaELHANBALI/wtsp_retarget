@@ -815,18 +815,9 @@ Keep responses concise and helpful."""
             # For test messages, skip state checks (don't use bot_state.json)
             is_first_contact = phone not in self.monitored_contacts if not test_message else True
             
-            # If contact is already in monitored_contacts, skip sending initial offer (they've already been contacted)
-            # BUT allow follow-ups to be sent (is_followup=True)
-            # BUT allow media to be sent (if media_path is provided, this is likely an AI response with media)
-            # Skip this check for test messages (test messages always send)
-            if not test_message and not is_first_contact and not is_followup and not media_path:
-                print(f"   ℹ️  {phone} has already been contacted. Skipping initial offer.")
-                print(f"   💡 This contact is being monitored and will receive follow-ups if needed.")
-                return True  # Return True to indicate "success" (no error, just skipped)
-            
-            # If this is the first contact, start monitoring BEFORE sending (clears history and marks existing messages as seen)
-            # But skip opening the chat since we're already in it
-            # For test messages, still monitor (in memory) but skip saving to bot_state.json
+            # CRITICAL: If this is the first contact, capture baseline messages BEFORE sending
+            # We're already in the chat (opened above), so we can safely get baseline messages
+            # These are messages that existed BEFORE we sent our message
             if is_first_contact:
                 # Add to monitored contacts (in memory - for both test and real messages)
                 if phone not in self.monitored_contacts:
@@ -837,24 +828,106 @@ Keep responses concise and helpful."""
                     self.test_contacts.add(phone)
                     print("   ℹ️  Test message: Contact marked as test contact (bot_state.json skipped)")
                 
-                # Start monitoring contact (in memory - enables AI responses)
-                self.start_monitoring_contact(phone, skip_chat_open=True)
+                # Initialize conversation history
+                if phone not in self.conversations:
+                    self.conversations[phone] = []
+                
+                # Initialize seen_message_ids and seen_message_texts if needed
+                if phone not in self.seen_message_ids:
+                    self.seen_message_ids[phone] = set()
+                if phone not in self.seen_message_texts:
+                    self.seen_message_texts[phone] = set()
+                
+                # CRITICAL: Capture baseline messages BEFORE sending our initial message
+                # We're already in the chat, so we can get all current messages
+                # These are messages that existed BEFORE we sent our message
+                # We'll mark only these as seen, so any messages that appear after are considered "new"
+                print(f"   📋 Capturing baseline messages (messages that exist BEFORE our initial message)...")
+                baseline_message_ids = set()  # Store baseline message IDs for later verification
+                baseline_message_texts = set()  # Store baseline message text fingerprints
+                try:
+                    # Wait a moment for chat to fully stabilize
+                    time.sleep(1)
+                    
+                    # Get all current messages BEFORE sending our message (we're already in the chat)
+                    baseline_messages = self._get_all_current_messages_without_open(phone)
+                    baseline_count = len(baseline_messages) if baseline_messages else 0
+                    print(f"   📊 Found {baseline_count} baseline messages (existing before our initial message)")
+                    
+                    # Mark baseline messages as seen (these are old messages)
+                    if baseline_messages:
+                        marked_count = 0
+                        for msg in baseline_messages:
+                            msg_id = msg.get('id', '')
+                            msg_text = msg.get('text', '').strip()
+                            
+                            # Skip empty messages
+                            if not msg_text:
+                                continue
+                            
+                            # Store in baseline sets (for later verification)
+                            if msg_id:
+                                baseline_message_ids.add(msg_id)
+                            msg_text_fingerprint = msg_text[:100] if len(msg_text) > 100 else msg_text
+                            baseline_message_texts.add(msg_text_fingerprint)
+                            
+                            # Mark by ID
+                            if msg_id:
+                                self.seen_message_ids[phone].add(msg_id)
+                            
+                            # Mark by text fingerprint
+                            self.seen_message_texts[phone].add(msg_text_fingerprint)
+                            marked_count += 1
+                            
+                            # Debug: log what we're marking (first few messages)
+                            if marked_count <= 3:
+                                print(f"      📌 Baseline message {marked_count}: '{msg_text[:50]}...' (ID: {msg_id[:20] if msg_id else 'N/A'})")
+                        
+                        print(f"   ✅ Marked {marked_count} baseline messages as seen (out of {baseline_count} total)")
+                        print(f"   💡 Only messages sent AFTER our initial message will trigger AI responses")
+                        print(f"   🔍 Baseline: {len(self.seen_message_ids.get(phone, set()))} message IDs, {len(self.seen_message_texts.get(phone, set()))} text fingerprints")
+                        
+                        # Store baseline for later verification
+                        self._baseline_message_ids = getattr(self, '_baseline_message_ids', {})
+                        self._baseline_message_ids[phone] = baseline_message_ids
+                        self._baseline_message_texts = getattr(self, '_baseline_message_texts', {})
+                        self._baseline_message_texts[phone] = baseline_message_texts
+                    else:
+                        print(f"   ℹ️  No baseline messages found (new conversation)")
+                        # Initialize empty baseline sets
+                        self._baseline_message_ids = getattr(self, '_baseline_message_ids', {})
+                        self._baseline_message_ids[phone] = set()
+                        self._baseline_message_texts = getattr(self, '_baseline_message_texts', {})
+                        self._baseline_message_texts[phone] = set()
+                except Exception as e:
+                    print(f"   ⚠️  Could not capture baseline messages: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    # Initialize empty baseline sets on error
+                    self._baseline_message_ids = getattr(self, '_baseline_message_ids', {})
+                    self._baseline_message_ids[phone] = set()
+                    self._baseline_message_texts = getattr(self, '_baseline_message_texts', {})
+                    self._baseline_message_texts[phone] = set()
                 
                 # Initialize follow-up tracking for this customer (in memory)
                 self.last_contact_time[phone] = datetime.now()
                 self.customer_responded[phone] = False
                 self.followup_sent[phone] = False
-                
-                # Save state to bot_state.json ONLY for real customers (skip for test messages)
-                if not test_message:
-                    try:
-                        self._save_state()
-                    except Exception as save_err:
-                        print(f"⚠️  Failed to save state after contacting {phone}: {save_err}")
-                        import traceback
-                        traceback.print_exc()
-                else:
-                    print("   ℹ️  Test message: Monitoring enabled (in memory), but bot_state.json skipped (reserved for real customers)")
+            
+            # If contact is already in monitored_contacts, skip sending initial offer (they've already been contacted)
+            # BUT allow follow-ups to be sent (is_followup=True)
+            # BUT allow media to be sent (if media_path is provided, this is likely an AI response with media)
+            # BUT allow AI responses (if customer has responded, this is an ongoing conversation)
+            # Skip this check for test messages (test messages always send)
+            customer_has_responded = self.customer_responded.get(phone, False)
+            if not test_message and not is_first_contact and not is_followup and not media_path and not customer_has_responded:
+                print(f"   ℹ️  {phone} has already been contacted. Skipping initial offer.")
+                print(f"   💡 This contact is being monitored and will receive follow-ups if needed.")
+                return True  # Return True to indicate "success" (no error, just skipped)
+            
+            # If customer has responded, this is an ongoing conversation - allow all messages (AI responses, follow-ups, etc.)
+            if customer_has_responded and not is_first_contact:
+                print(f"   💬 Customer has responded - this is an ongoing conversation, allowing message to be sent")
             
             # Handle media sending logic
             # NEW FEATURE: On first contact, store media to send after customer responds
@@ -952,7 +1025,6 @@ Keep responses concise and helpful."""
             # Handle state operations (in memory for test messages, save to bot_state.json for real customers)
             # For test messages, still track conversation history and monitor (in memory), but skip bot_state.json
             if is_first_contact:
-                # (History was already cleared in start_monitoring_contact above)
                 # Add our offer message to conversation history (in memory - for both test and real messages)
                 if phone not in self.conversations:
                     self.conversations[phone] = []
@@ -967,6 +1039,74 @@ Keep responses concise and helpful."""
                     self.last_contact_time[phone] = datetime.now()
                     self.customer_responded[phone] = False
                     self.followup_sent[phone] = False
+                
+                # CRITICAL: After sending our initial message, verify baseline is correct
+                # IMPORTANT: Only mark messages that were in the ORIGINAL baseline
+                # Do NOT mark new messages that appeared after we sent (customer responses)
+                print(f"   📋 Verifying baseline after sending initial message...")
+                try:
+                    # Wait a moment for our message to appear in the chat
+                    time.sleep(1.5)
+                    
+                    # Get the original baseline sets (captured before sending)
+                    original_baseline_ids = self._baseline_message_ids.get(phone, set()) if hasattr(self, '_baseline_message_ids') else set()
+                    original_baseline_texts = self._baseline_message_texts.get(phone, set()) if hasattr(self, '_baseline_message_texts') else set()
+                    
+                    # Get all current messages (includes our message and any old messages, potentially customer response)
+                    current_messages = self._get_all_current_messages_without_open(phone)
+                    current_count = len(current_messages) if current_messages else 0
+                    
+                    # Mark ONLY messages that were in the original baseline
+                    # Do NOT mark new messages (customer responses) that appeared after we sent
+                    newly_marked = 0
+                    skipped_new = 0
+                    if current_messages:
+                        for msg in current_messages:
+                            msg_id = msg.get('id', '')
+                            msg_text = msg.get('text', '').strip()
+                            
+                            if not msg_text:
+                                continue
+                            
+                            msg_text_fingerprint = msg_text[:100] if len(msg_text) > 100 else msg_text
+                            
+                            # Check if this message was in the ORIGINAL baseline
+                            was_in_baseline = False
+                            if msg_id and msg_id in original_baseline_ids:
+                                was_in_baseline = True
+                            elif msg_text_fingerprint in original_baseline_texts:
+                                was_in_baseline = True
+                            
+                            # Only mark if it was in the original baseline
+                            if was_in_baseline:
+                                # Check if already marked
+                                msg_id_seen = msg_id and msg_id in self.seen_message_ids.get(phone, set())
+                                msg_text_seen = msg_text_fingerprint in self.seen_message_texts.get(phone, set())
+                                
+                                # If not marked, mark it now (safety check for baseline messages)
+                                if not msg_id_seen or not msg_text_seen:
+                                    if msg_id:
+                                        self.seen_message_ids[phone].add(msg_id)
+                                    self.seen_message_texts[phone].add(msg_text_fingerprint)
+                                    newly_marked += 1
+                            else:
+                                # This message was NOT in the original baseline - it's a NEW message!
+                                # Do NOT mark it as seen - it's a customer response
+                                skipped_new += 1
+                                print(f"      ⚠️  Found NEW message (not in baseline): '{msg_text[:50]}...' - will be detected as new!")
+                    
+                    if newly_marked > 0:
+                        print(f"   ✅ Marked {newly_marked} additional baseline message(s) as seen (safety check)")
+                    
+                    if skipped_new > 0:
+                        print(f"   ✅ Found {skipped_new} NEW message(s) (customer response(s)) - will be processed as new!")
+                    
+                    print(f"   🔍 Baseline verified: {len(self.seen_message_ids.get(phone, set()))} message IDs, {len(self.seen_message_texts.get(phone, set()))} text fingerprints")
+                    print(f"   💡 Customer responses sent AFTER our initial message will be detected as NEW")
+                except Exception as e:
+                    print(f"   ⚠️  Could not verify baseline: {e}")
+                    import traceback
+                    traceback.print_exc()
                 
                 # Automatically start background monitoring if not already running (for both test and real messages)
                 # This enables AI auto-responses for test messages too
@@ -1827,6 +1967,126 @@ Keep responses concise and helpful."""
             traceback.print_exc()
             return False
 
+    def _get_all_current_messages_without_open(self, phone: str) -> List[dict]:
+        """
+        Get all current messages from a contact (without filtering for new ones)
+        This is used to establish a baseline before sending our initial message
+        Assumes we're already in the chat (doesn't open chat)
+        
+        Args:
+            phone: Phone number to check
+            
+        Returns:
+            List of message dictionaries with 'id', 'text', and 'timestamp' keys
+        """
+        try:
+            phone = self._format_phone(phone)
+            
+            # We're already in the chat, just wait for it to stabilize
+            time.sleep(1)  # Brief wait for chat to stabilize
+            
+            # Scroll to ensure all messages are loaded
+            try:
+                self.driver.execute_script("""
+                    const msgContainer = document.querySelector('[data-testid="conversation-panel-body"]') ||
+                                        document.querySelector('[data-testid="conversation-panel-messages"]');
+                    if (msgContainer) {
+                        msgContainer.scrollTop = msgContainer.scrollHeight;
+                    }
+                """)
+                time.sleep(1.0)  # Wait for messages to render after scroll
+            except:
+                pass
+            
+            time.sleep(1.5)  # Wait for messages to render
+            
+            # Use JavaScript to find all incoming messages
+            result = self.driver.execute_script(r"""
+                // Try multiple selectors for message containers
+                let messageContainers = document.querySelectorAll('[data-testid="msg-container"]');
+                
+                // Fallback: try alternative selectors
+                if (messageContainers.length === 0) {
+                    messageContainers = document.querySelectorAll('div[data-id]');
+                }
+                
+                // Filter for incoming messages (not sent by us)
+                const incomingMessages = [];
+                
+                for (const container of messageContainers) {
+                    // Check if this is an incoming message (has 'message-in' class)
+                    const msgDiv = container.querySelector('[class*="message-in"]');
+                    
+                    if (msgDiv) {
+                        // Get the text content - try multiple selectors
+                        let text = null;
+                        
+                        // Try .selectable-text first
+                        const selectableText = container.querySelector('.selectable-text');
+                        if (selectableText) {
+                            text = selectableText.textContent || selectableText.innerText;
+                        }
+                        
+                        // Try conversation-text as fallback
+                        if (!text) {
+                            const convText = container.querySelector('[data-testid="conversation-text"]');
+                            if (convText) {
+                                text = convText.textContent || convText.innerText;
+                            }
+                        }
+                        
+                        // Try any span with text as last resort
+                        if (!text) {
+                            const spans = container.querySelectorAll('span');
+                            for (const span of spans) {
+                                const spanText = span.textContent || span.innerText;
+                                if (spanText && spanText.trim() && spanText.length > 0) {
+                                    text = spanText;
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        if (text && text.trim()) {
+                            // Get timestamp if available
+                            let timestamp = null;
+                            const timeEl = container.querySelector('[data-testid="msg-meta"]') ||
+                                          container.querySelector('span[class*="timestamp"]') ||
+                                          container.querySelector('div[data-pre-plain-text]');
+                            if (timeEl) {
+                                timestamp = timeEl.textContent || timeEl.getAttribute('data-pre-plain-text');
+                            }
+                            
+                            // Create unique ID from message content + timestamp
+                            const msgId = container.getAttribute('data-id') ||
+                                         (text.substring(0, 50) + (timestamp || '')).replace(/\s/g, '');
+                            
+                            incomingMessages.push({
+                                text: text.trim(),
+                                timestamp: timestamp,
+                                id: msgId
+                            });
+                        }
+                    }
+                }
+                
+                // Return all incoming messages
+                return {
+                    messages: incomingMessages,
+                    count: incomingMessages.length
+                };
+            """)
+            
+            if result:
+                messages = result.get('messages', [])
+                return messages
+            
+            return []
+            
+        except Exception as e:
+            print(f"⚠️  Error getting all current messages for {phone}: {e}")
+            return []
+
     def get_new_messages(self, phone: str, skip_chat_open: bool = False) -> Optional[str]:
         """
         Check for new messages from a contact
@@ -2017,40 +2277,156 @@ Keep responses concise and helpful."""
                 if msg_count == 0 and verbose:
                     print("⚠️  JavaScript found 0 messages - will try fallback method")
 
-                # Get seen message IDs for this phone
+                # Get seen message IDs and texts for this phone
                 if not hasattr(self, 'seen_message_ids'):
                     self.seen_message_ids = {}
                 if phone not in self.seen_message_ids:
                     self.seen_message_ids[phone] = set()
+                
+                # Initialize seen_message_texts if needed
+                if not hasattr(self, 'seen_message_texts'):
+                    self.seen_message_texts = {}
+                if phone not in self.seen_message_texts:
+                    self.seen_message_texts[phone] = set()
 
                 # Find NEW messages (ones we haven't seen before)
+                # CRITICAL: We need to check if a message was in the ORIGINAL baseline
+                # A message is only "seen" if BOTH its ID AND text were in the baseline
+                # If only text matches but ID is different, it's a NEW message (customer sent same text again)
                 new_messages = []
+                total_messages = len(messages)
+                print(f"   🔍 Checking {total_messages} incoming messages for new ones...")
+                print(f"   📊 Baseline: {len(self.seen_message_ids.get(phone, set()))} message IDs, {len(self.seen_message_texts.get(phone, set()))} text fingerprints")
+                
+                # Get original baseline sets (captured before sending initial message)
+                # Initialize if not exists (for contacts that were added before this feature)
+                if not hasattr(self, '_baseline_message_ids'):
+                    self._baseline_message_ids = {}
+                if not hasattr(self, '_baseline_message_texts'):
+                    self._baseline_message_texts = {}
+                
+                original_baseline_ids = self._baseline_message_ids.get(phone, set())
+                original_baseline_texts = self._baseline_message_texts.get(phone, set())
+                
+                if original_baseline_ids or original_baseline_texts:
+                    print(f"   📋 Using baseline: {len(original_baseline_ids)} IDs, {len(original_baseline_texts)} text fingerprints")
+                else:
+                    print(f"   ⚠️  No baseline found for {phone} - treating all messages as potentially new")
+                
                 for msg in messages:
                     msg_id = msg.get('id', '')
-                    msg_text = msg.get('text', '')
-                    if msg_id and msg_id not in self.seen_message_ids[phone]:
+                    msg_text = msg.get('text', '').strip()
+                    
+                    # Skip empty messages
+                    if not msg_text:
+                        continue
+                    
+                    # Check if this message was in the ORIGINAL baseline
+                    msg_id_in_baseline = msg_id and msg_id in original_baseline_ids
+                    msg_text_fingerprint = msg_text[:100] if len(msg_text) > 100 else msg_text
+                    msg_text_in_baseline = msg_text_fingerprint in original_baseline_texts
+                    
+                    # Message is in baseline if BOTH ID and text were in baseline
+                    is_in_baseline = msg_id_in_baseline and msg_text_in_baseline
+                    
+                    # Check if we've already marked it as seen (for messages we've processed)
+                    msg_id_seen = msg_id and msg_id in self.seen_message_ids.get(phone, set())
+                    msg_text_seen = msg_text_fingerprint in self.seen_message_texts.get(phone, set())
+                    
+                    # CRITICAL: If message text is in baseline, we need to be more careful
+                    # If text is in baseline, it's likely an old message, even if ID is different
+                    # Only treat it as new if:
+                    # 1. It's NOT in baseline (both ID and text), AND
+                    # 2. We haven't already processed a message with this text after our initial message
+                    # 
+                    # If text is in baseline but we've already processed it, it's the same old message
+                    # (WhatsApp might be giving it different IDs on different checks)
+                    if msg_text_in_baseline:
+                        # Text is in baseline - this is likely an old message
+                        # Only treat as new if:
+                        # - ID is NOT in baseline (different ID), AND
+                        # - We haven't already processed a message with this text
+                        if msg_id_in_baseline:
+                            # Both ID and text in baseline - definitely old
+                            is_seen = True
+                        elif msg_text_seen:
+                            # Text in baseline and we've already processed it - it's the same old message
+                            # (WhatsApp might be giving it different IDs, but it's still the same message)
+                            is_seen = True
+                        else:
+                            # Text in baseline but ID is different AND we haven't processed it
+                            # This could be:
+                            # 1. Customer sent the same text again (new message) - treat as new
+                            # 2. Old message with different ID - but we can't tell, so treat as new
+                            # We'll treat it as new, but be cautious
+                            is_seen = False
+                    else:
+                        # Text is NOT in baseline - this is definitely a new message
+                        # Check if we've already processed it
+                        is_seen = msg_id_seen and msg_text_seen
+                    
+                    # Only consider it new if it's NOT seen
+                    if not is_seen:
                         new_messages.append(msg)
-                        verbose = getattr(self, 'verbose_monitoring', False)
-                        if verbose:
-                            print(f"  ✨ NEW: {msg_text[:60]}..." if len(msg_text) > 60 else f"  ✨ NEW: {msg_text}")
+                        # Log new messages (always log for debugging)
+                        print(f"  ✨ NEW message from {phone}: '{msg_text[:60]}...' (ID: {msg_id[:20] if msg_id else 'N/A'})" if len(msg_text) > 60 else f"  ✨ NEW message from {phone}: '{msg_text}' (ID: {msg_id[:20] if msg_id else 'N/A'})")
+                        if msg_id_in_baseline or msg_text_in_baseline:
+                            print(f"      ⚠️  Note: Text or ID matches baseline, but BOTH don't match - treating as NEW")
+                    else:
+                        # Log skipped messages for debugging (first few)
+                        if msg_id_in_baseline and msg_text_in_baseline:
+                            reason = "in original baseline"
+                        elif msg_id_seen and msg_text_seen:
+                            reason = "already processed"
+                        elif msg_id_in_baseline:
+                            reason = "ID in baseline"
+                        elif msg_text_in_baseline:
+                            reason = "text in baseline"
+                        else:
+                            reason = "unknown"
+                        
+                        if len(new_messages) < 3:  # Only log first few skipped for debugging
+                            print(f"  ℹ️  SKIPPED ({reason}): '{msg_text[:50]}...' (ID: {msg_id[:20] if msg_id else 'N/A'})")
+                
+                if new_messages:
+                    print(f"   ✅ Found {len(new_messages)} new message(s) out of {total_messages} total")
+                else:
+                    print(f"   ℹ️  No new messages found (all {total_messages} messages already seen)")
 
                 # If we found new messages, mark them as seen and return the FIRST new one
                 if new_messages:
-                    # Mark ALL new messages as seen
+                    # Mark ALL new messages as seen (both ID and text)
                     for msg in new_messages:
-                        self.seen_message_ids[phone].add(msg.get('id', ''))
-
+                        msg_id = msg.get('id', '')
+                        msg_text = msg.get('text', '').strip()
+                        
+                        # Mark by ID
+                        if msg_id:
+                            self.seen_message_ids[phone].add(msg_id)
+                        
+                        # Mark by text fingerprint (first 100 chars)
+                        if msg_text:
+                            msg_text_fingerprint = msg_text[:100] if len(msg_text) > 100 else msg_text
+                            if phone not in self.seen_message_texts:
+                                self.seen_message_texts[phone] = set()
+                            self.seen_message_texts[phone].add(msg_text_fingerprint)
+                        
                     # Keep only last 100 message IDs to avoid memory bloat
                     if len(self.seen_message_ids[phone]) > 100:
                         # Convert to list, keep last 100, convert back to set
                         self.seen_message_ids[phone] = set(list(self.seen_message_ids[phone])[-100:])
-
+                    
+                    # Keep only last 100 message text fingerprints to avoid memory bloat
+                    if phone in self.seen_message_texts and len(self.seen_message_texts[phone]) > 100:
+                        # Convert to list, keep last 100, convert back to set
+                        self.seen_message_texts[phone] = set(list(self.seen_message_texts[phone])[-100:])
+                    
                     # Return the FIRST new message (oldest unread)
-                    last_msg = new_messages[0].get('text', '')
+                    last_msg = new_messages[0].get('text', '').strip()
                     verbose = getattr(self, 'verbose_monitoring', False)
                     if verbose:
                         print(f"✨ Returning FIRST new message from {phone}: {last_msg[:100]}...")
-
+                    
                     # Also update the old tracking for backward compatibility
                     if last_msg:
                         self.last_messages[phone] = last_msg
