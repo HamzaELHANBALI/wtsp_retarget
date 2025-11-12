@@ -82,9 +82,12 @@ else:
     # Use message from JSON file - replace {name} placeholder with "Customer" for testing
     MESSAGE = _default_message.replace("{name}", "Customer")
 
-# Optional: Media file path
+# Optional: Media file paths
 # Set to None for text-only, or provide path to image/video
+# Main media: Sent after customer responds
 MEDIA_FILE = "/Users/hamzaelhanbali/Desktop/personal/tiger/hamza_tiger_27_octobre_1.mp4"  # Update this path
+# Second media (free product): Sent immediately after main media
+MEDIA_FILE_2 = None  # Optional: Path to free product media (e.g., electric ashtray)
 
 # Load AI System Prompt from JSON file (defaults to lighter watch bundle)
 # Change prompt_file_name to use a different prompt file
@@ -249,7 +252,8 @@ def main():
     print("="*60)
     print(f"\n📋 Configuration:")
     print(f"   Contacts: {len(CONTACTS)}")
-    print(f"   Media: {'Yes' if MEDIA_FILE else 'No'}")
+    print(f"   Main Media: {'Yes' if MEDIA_FILE else 'No'}")
+    print(f"   Second Media (Free Product): {'Yes' if MEDIA_FILE_2 else 'No'}")
     print(f"   AI: Enabled (if API key configured)")
     # List available prompts
     available_prompts = list_available_prompt_files()
@@ -286,7 +290,8 @@ def main():
             success = bot.send_message(
                 phone=contact,
                 message=MESSAGE,
-                media_path=MEDIA_FILE
+                media_path=MEDIA_FILE,
+                media_path_2=MEDIA_FILE_2
             )
 
             if success:

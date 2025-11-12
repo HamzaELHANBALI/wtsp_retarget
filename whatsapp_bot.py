@@ -186,8 +186,10 @@ Keep responses concise and helpful."""
         self.default_followup_template = self._load_followup_message_from_json()
         
         # Pending media tracking (media to send after customer responds)
-        self.pending_media: Dict[str, str] = {}  # {phone: media_path} - Media to send after first customer response
-        self.media_sent_after_response: Dict[str, bool] = {}  # Track if media was already sent after response
+        self.pending_media: Dict[str, str] = {}  # {phone: media_path} - Main media to send after first customer response
+        self.pending_media_2: Dict[str, str] = {}  # {phone: media_path} - Second media (free product) to send immediately after first media
+        self.media_sent_after_response: Dict[str, bool] = {}  # Track if main media was already sent after response
+        self.media_2_sent_after_response: Dict[str, bool] = {}  # Track if second media was already sent after response
         
         # Automatic monitoring
         self.auto_monitoring_active = False
@@ -585,7 +587,9 @@ Keep responses concise and helpful."""
                 
                 # Load pending media (media to send after customer responds)
                 self.pending_media = state.get('pending_media', {})
+                self.pending_media_2 = state.get('pending_media_2', {})
                 self.media_sent_after_response = state.get('media_sent_after_response', {})
+                self.media_2_sent_after_response = state.get('media_2_sent_after_response', {})
                 
                 # Load seen message IDs and texts (convert lists back to sets)
                 seen_message_ids_dict = state.get('seen_message_ids', {})
@@ -634,7 +638,9 @@ Keep responses concise and helpful."""
                 'customer_responded': self.customer_responded,
                 'followup_sent': self.followup_sent,
                 'pending_media': self.pending_media,
+                'pending_media_2': self.pending_media_2,
                 'media_sent_after_response': self.media_sent_after_response,
+                'media_2_sent_after_response': self.media_2_sent_after_response,
                 'seen_message_ids': seen_message_ids_dict,
                 'seen_message_texts': seen_message_texts_dict,
                 'last_saved': datetime.now().isoformat()
@@ -722,6 +728,7 @@ Keep responses concise and helpful."""
         phone: str,
         message: str,
         media_path: Optional[str] = None,
+        media_path_2: Optional[str] = None,
         is_followup: bool = False
     ) -> bool:
         """
@@ -730,7 +737,8 @@ Keep responses concise and helpful."""
         Args:
             phone: Phone number (e.g., "+966501234567")
             message: Message text (or caption if media provided)
-            media_path: Optional path to image/video file
+            media_path: Optional path to main image/video file (sent after customer responds on first contact)
+            media_path_2: Optional path to second image/video file (free product, sent immediately after first media)
             is_followup: If True, allow sending even if contact is already in monitored_contacts
 
         Returns:
@@ -793,11 +801,20 @@ Keep responses concise and helpful."""
                     # This is important because the bot might be restarted from a different directory
                     media_abs_path = str(Path(media_path).absolute())
                     
-                    # Store absolute path for later sending
+                    # Store main media absolute path for later sending
                     self.pending_media[phone] = media_abs_path
                     self.media_sent_after_response[phone] = False
-                    print(f"   📎 Media stored for {phone} - will be sent after customer responds")
-                    print(f"   📁 Media path: {media_abs_path}")
+                    print(f"   📎 Main media stored for {phone} - will be sent after customer responds")
+                    print(f"   📁 Main media path: {media_abs_path}")
+                    
+                    # Store second media (free product) if provided
+                    if media_path_2 and os.path.exists(media_path_2):
+                        media_2_abs_path = str(Path(media_path_2).absolute())
+                        self.pending_media_2[phone] = media_2_abs_path
+                        self.media_2_sent_after_response[phone] = False
+                        print(f"   📎 Second media (free product) stored for {phone} - will be sent immediately after main media")
+                        print(f"   📁 Second media path: {media_2_abs_path}")
+                    
                     # Save state to persist pending media
                     try:
                         self._save_state()
@@ -2672,27 +2689,53 @@ Keep responses concise and helpful."""
                                     pending_media_path = str(Path(pending_media_path).absolute())
                                     
                                     if os.path.exists(pending_media_path):
-                                        print(f"   📎 Sending pending media to {phone}...")
-                                        print(f"   📁 Media file: {Path(pending_media_path).name}")
+                                        print(f"   📎 Sending main media to {phone}...")
+                                        print(f"   📁 Main media file: {Path(pending_media_path).name}")
                                         # Open chat for this contact (required for sending media)
                                         if self._open_chat_safely(phone):
-                                            # Send media with empty caption
+                                            # Send main media with empty caption
                                             # The original message was already sent, so we send media separately
                                             media_sent = self._send_media(pending_media_path, "")
                                             if media_sent:
                                                 self.media_sent_after_response[phone] = True
-                                                print(f"   ✅ Pending media sent successfully to {phone}")
+                                                print(f"   ✅ Main media sent successfully to {phone}")
                                                 # Add media reference to conversation history
                                                 if phone not in self.conversations:
                                                     self.conversations[phone] = []
                                                 self.conversations[phone].append({
                                                     "role": "assistant",
-                                                    "content": f"[Media sent: {Path(pending_media_path).name}]"
+                                                    "content": f"[Main media sent: {Path(pending_media_path).name}]"
                                                 })
+                                                
+                                                # Send second media (free product) immediately after main media
+                                                if phone in self.pending_media_2:
+                                                    pending_media_2_path = self.pending_media_2[phone]
+                                                    if not self.media_2_sent_after_response.get(phone, False):
+                                                        pending_media_2_path = str(Path(pending_media_2_path).absolute())
+                                                        
+                                                        if os.path.exists(pending_media_2_path):
+                                                            print(f"   📎 Sending second media (free product) to {phone}...")
+                                                            print(f"   📁 Second media file: {Path(pending_media_2_path).name}")
+                                                            # Small delay between media sends
+                                                            time.sleep(2)
+                                                            media_2_sent = self._send_media(pending_media_2_path, "")
+                                                            if media_2_sent:
+                                                                self.media_2_sent_after_response[phone] = True
+                                                                print(f"   ✅ Second media (free product) sent successfully to {phone}")
+                                                                self.conversations[phone].append({
+                                                                    "role": "assistant",
+                                                                    "content": f"[Free product media sent: {Path(pending_media_2_path).name}]"
+                                                                })
+                                                            else:
+                                                                print(f"   ⚠️  Failed to send second media to {phone}")
+                                                        else:
+                                                            print(f"   ⚠️  Second media file not found: {pending_media_2_path}")
+                                                            del self.pending_media_2[phone]
+                                                
                                                 # Save state after sending media
                                                 self._save_state()
                                             else:
-                                                print(f"   ⚠️  Failed to send pending media to {phone}")
+                                                print(f"   ⚠️  Failed to send main media to {phone}")
                                         else:
                                             print(f"   ⚠️  Failed to open chat for {phone} - cannot send media")
                                     else:
@@ -2700,6 +2743,8 @@ Keep responses concise and helpful."""
                                         print(f"   💡 Make sure the media file exists and wasn't deleted")
                                         # Remove invalid pending media
                                         del self.pending_media[phone]
+                                        if phone in self.pending_media_2:
+                                            del self.pending_media_2[phone]
                                         self._save_state()
                             
                             # Save state after customer responds

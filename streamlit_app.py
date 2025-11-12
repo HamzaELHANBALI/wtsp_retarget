@@ -784,14 +784,17 @@ with tab1:
                     st.caption("💡 Add OpenAI API key to enable AI monitoring")
 
             with test_col2:
+                st.markdown("**📎 Test Media Files**")
+                st.caption("💡 Main media sent after customer responds. Second media (free product) sent immediately after.")
+                
                 test_media = st.file_uploader(
-                    "📎 Attach Media (Optional)",
+                    "📎 Main Media (Optional) - Sent after customer responds",
                     type=['jpg', 'jpeg', 'png', 'gif', 'mp4', 'avi', 'mov'],
-                    help="Upload an image or video to test media sending (max 500MB)",
+                    help="Upload main product media for testing (max 500MB)",
                     key="test_media"
                 )
 
-                # Save uploaded test media
+                # Save uploaded test main media
                 test_media_path = None
                 if test_media is not None:
                     try:
@@ -809,11 +812,43 @@ with tab1:
                                 with open(test_media_path, "wb") as f:
                                     f.write(test_media.getbuffer())
 
-                            st.success(f"✅ Media ready: {test_media.name} ({file_size_mb:.1f}MB)")
+                            st.success(f"✅ Main media ready: {test_media.name} ({file_size_mb:.1f}MB)")
                     except Exception as e:
                         st.error(f"❌ Error uploading media: {str(e)}")
                         st.info("💡 Try a smaller file or different format")
                         test_media_path = None
+                
+                # Second test media upload
+                test_media_2 = st.file_uploader(
+                    "🎁 Second Media - Free Product (Optional) - Sent after main media",
+                    type=['jpg', 'jpeg', 'png', 'gif', 'mp4', 'avi', 'mov'],
+                    help="Upload free product media for testing (max 500MB)",
+                    key="test_media_2"
+                )
+
+                # Save uploaded test second media
+                test_media_path_2 = None
+                if test_media_2 is not None:
+                    try:
+                        # Get file size in MB
+                        file_size_mb_2 = test_media_2.size / (1024 * 1024)
+
+                        if file_size_mb_2 > 500:
+                            st.error(f"❌ File too large: {file_size_mb_2:.1f}MB. Max: 500MB")
+                        else:
+                            temp_dir = Path("temp_media")
+                            temp_dir.mkdir(exist_ok=True)
+                            test_media_path_2 = temp_dir / f"test_{test_media_2.name}"
+
+                            with st.spinner(f"Uploading {test_media_2.name} ({file_size_mb_2:.1f}MB)..."):
+                                with open(test_media_path_2, "wb") as f:
+                                    f.write(test_media_2.getbuffer())
+
+                            st.success(f"✅ Free product media ready: {test_media_2.name} ({file_size_mb_2:.1f}MB)")
+                    except Exception as e:
+                        st.error(f"❌ Error uploading second media: {str(e)}")
+                        st.info("💡 Try a smaller file or different format")
+                        test_media_path_2 = None
 
                 # Preview
                 st.markdown("**Message Preview:**")
@@ -842,7 +877,8 @@ with tab1:
                             success = st.session_state.bot.send_message(
                                 phone=formatted_phone,
                                 message=final_message,
-                                media_path=str(test_media_path) if test_media_path else None
+                                media_path=str(test_media_path) if test_media_path else None,
+                                media_path_2=str(test_media_path_2) if test_media_path_2 else None
                             )
 
                             if success:
@@ -1073,14 +1109,18 @@ with tab1:
                 help="Use {name}, {phone}, {custom_message} as placeholders. Edit initial_message.json to change the default."
             )
 
-            # Media upload
+            # Media upload - Main media (sent after customer responds)
+            st.markdown("**📎 Media Files**")
+            st.caption("💡 Main media will be sent when customer responds. Second media (free product) will be sent immediately after.")
+            
             media_file = st.file_uploader(
-                "📎 Attach Media (Optional)",
+                "📎 Main Media (Optional) - Sent after customer responds",
                 type=['jpg', 'jpeg', 'png', 'gif', 'mp4', 'avi', 'mov'],
-                help="Upload an image or video to send with your message (max 500MB)"
+                help="Upload main product media. This will be sent when the customer responds to your initial message (max 500MB)",
+                key="main_media"
             )
 
-            # Save uploaded media temporarily
+            # Save uploaded main media temporarily
             media_path = None
             if media_file is not None:
                 try:
@@ -1099,11 +1139,44 @@ with tab1:
                             with open(media_path, "wb") as f:
                                 f.write(media_file.getbuffer())
 
-                        st.success(f"✅ Media attached: {media_file.name} ({file_size_mb:.1f}MB)")
+                        st.success(f"✅ Main media attached: {media_file.name} ({file_size_mb:.1f}MB)")
                 except Exception as e:
                     st.error(f"❌ Error uploading media: {str(e)}")
                     st.info("💡 Try a smaller file or different format")
                     media_path = None
+            
+            # Second media upload - Free product (sent immediately after main media)
+            media_file_2 = st.file_uploader(
+                "🎁 Second Media - Free Product (Optional) - Sent after main media",
+                type=['jpg', 'jpeg', 'png', 'gif', 'mp4', 'avi', 'mov'],
+                help="Upload free product media (e.g., electric ashtray). This will be sent immediately after the main media (max 500MB)",
+                key="second_media"
+            )
+
+            # Save uploaded second media temporarily
+            media_path_2 = None
+            if media_file_2 is not None:
+                try:
+                    # Get file size in MB
+                    file_size_mb_2 = media_file_2.size / (1024 * 1024)
+
+                    if file_size_mb_2 > 500:
+                        st.error(f"❌ File too large: {file_size_mb_2:.1f}MB. Max: 500MB")
+                    else:
+                        # Save to temp location
+                        temp_dir = Path("temp_media")
+                        temp_dir.mkdir(exist_ok=True)
+                        media_path_2 = temp_dir / media_file_2.name
+
+                        with st.spinner(f"Uploading {media_file_2.name} ({file_size_mb_2:.1f}MB)..."):
+                            with open(media_path_2, "wb") as f:
+                                f.write(media_file_2.getbuffer())
+
+                        st.success(f"✅ Free product media attached: {media_file_2.name} ({file_size_mb_2:.1f}MB)")
+                except Exception as e:
+                    st.error(f"❌ Error uploading second media: {str(e)}")
+                    st.info("💡 Try a smaller file or different format")
+                    media_path_2 = None
 
             # Preview message
             with st.expander("👁️ Preview Message"):
@@ -1468,7 +1541,8 @@ with tab1:
                                 success = st.session_state.bot.send_message(
                                     phone=contact['phone_formatted'],
                                     message=message,
-                                    media_path=str(media_path) if media_path else None
+                                    media_path=str(media_path) if media_path else None,
+                                    media_path_2=str(media_path_2) if media_path_2 else None
                                 )
 
                                 if success:
