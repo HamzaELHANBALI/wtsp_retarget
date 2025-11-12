@@ -44,7 +44,8 @@ class WhatsAppBot:
         openai_api_key: Optional[str] = None,
         system_prompt: Optional[str] = None,
         headless: bool = False,
-        contacts_df = None
+        contacts_df = None,
+        test_mode: bool = False
     ):
         """
         Initialize WhatsApp Bot
@@ -54,12 +55,16 @@ class WhatsAppBot:
             system_prompt: Custom AI system prompt
             headless: Run browser in headless mode (not recommended for WhatsApp)
             contacts_df: DataFrame with customer data (name, phone, address/city)
+            test_mode: If True, skip loading/saving bot_state.json (reserved for real customers)
         """
         # Load environment variables
         load_dotenv()
 
         # Store contacts dataframe for customer lookup
         self.contacts_df = contacts_df
+        
+        # Test mode flag (skip bot_state.json operations when True)
+        self.test_mode = test_mode
 
         # Setup OpenAI
         api_key = openai_api_key or os.getenv('OPENAI_API_KEY')
@@ -174,6 +179,7 @@ Keep responses concise and helpful."""
         self.last_messages: Dict[str, str] = {}  # Legacy text-based tracking
         self.seen_message_ids: Dict[str, set] = {}  # New ID-based tracking
         self.monitored_contacts: List[str] = []
+        self.test_contacts: set = set()  # Track test contacts (skip bot_state.json for these)
         
         # Follow-up (relance) tracking
         self.last_contact_time: Dict[str, datetime] = {}  # When we last contacted each customer
@@ -215,8 +221,12 @@ Keep responses concise and helpful."""
         self._initialize_leads_file()
 
         # State persistence (to remember contacted customers across restarts)
+        # Skip bot_state.json operations in test mode (reserved for real customers)
         self.state_file = Path.cwd() / "bot_state.json"
-        self._load_state()  # Load previous state on startup
+        if not self.test_mode:
+            self._load_state()  # Load previous state on startup
+        else:
+            print("ℹ️  Test mode enabled - skipping bot_state.json (reserved for real customers)")
 
         # Setup browser
         self.driver = None
@@ -562,6 +572,11 @@ Keep responses concise and helpful."""
 
     def _load_state(self):
         """Load bot state from file (monitored contacts, contact times, etc.)"""
+        # Skip loading state in test mode (reserved for real customers)
+        if self.test_mode:
+            print("ℹ️  Test mode: Skipping bot_state.json load")
+            return
+        
         if self.state_file.exists():
             try:
                 with open(self.state_file, 'r', encoding='utf-8') as f:
@@ -617,6 +632,19 @@ Keep responses concise and helpful."""
 
     def _save_state(self):
         """Save bot state to file (monitored contacts, contact times, etc.)"""
+        # Skip saving state in test mode OR if all monitored contacts are test contacts (reserved for real customers)
+        if self.test_mode:
+            # Don't print every time to avoid spam, but log occasionally if needed
+            return
+        
+        # Filter out test contacts from state (don't save test contacts to bot_state.json)
+        real_monitored_contacts = [c for c in self.monitored_contacts if c not in self.test_contacts]
+        
+        # If all contacts are test contacts, skip saving (no real customers to save)
+        if not real_monitored_contacts and self.monitored_contacts:
+            # All monitored contacts are test contacts - skip saving
+            return
+        
         try:
             # Convert datetime objects to ISO strings for JSON serialization
             last_contact_times_iso = {
@@ -632,17 +660,28 @@ Keep responses concise and helpful."""
                 phone: list(texts) for phone, texts in self.seen_message_texts.items()
             }
             
+            # Filter out test contacts from all state dictionaries (don't save test contacts to bot_state.json)
+            real_last_contact_time = {k: v for k, v in last_contact_times_iso.items() if k not in self.test_contacts}
+            real_customer_responded = {k: v for k, v in self.customer_responded.items() if k not in self.test_contacts}
+            real_followup_sent = {k: v for k, v in self.followup_sent.items() if k not in self.test_contacts}
+            real_pending_media = {k: v for k, v in self.pending_media.items() if k not in self.test_contacts}
+            real_pending_media_2 = {k: v for k, v in self.pending_media_2.items() if k not in self.test_contacts}
+            real_media_sent_after_response = {k: v for k, v in self.media_sent_after_response.items() if k not in self.test_contacts}
+            real_media_2_sent_after_response = {k: v for k, v in self.media_2_sent_after_response.items() if k not in self.test_contacts}
+            real_seen_message_ids = {k: v for k, v in seen_message_ids_dict.items() if k not in self.test_contacts}
+            real_seen_message_texts = {k: v for k, v in seen_message_texts_dict.items() if k not in self.test_contacts}
+            
             state = {
-                'monitored_contacts': self.monitored_contacts,
-                'last_contact_time': last_contact_times_iso,
-                'customer_responded': self.customer_responded,
-                'followup_sent': self.followup_sent,
-                'pending_media': self.pending_media,
-                'pending_media_2': self.pending_media_2,
-                'media_sent_after_response': self.media_sent_after_response,
-                'media_2_sent_after_response': self.media_2_sent_after_response,
-                'seen_message_ids': seen_message_ids_dict,
-                'seen_message_texts': seen_message_texts_dict,
+                'monitored_contacts': real_monitored_contacts,  # Only real customers (no test contacts)
+                'last_contact_time': real_last_contact_time,
+                'customer_responded': real_customer_responded,
+                'followup_sent': real_followup_sent,
+                'pending_media': real_pending_media,
+                'pending_media_2': real_pending_media_2,
+                'media_sent_after_response': real_media_sent_after_response,
+                'media_2_sent_after_response': real_media_2_sent_after_response,
+                'seen_message_ids': real_seen_message_ids,
+                'seen_message_texts': real_seen_message_texts,
                 'last_saved': datetime.now().isoformat()
             }
             
@@ -664,7 +703,13 @@ Keep responses concise and helpful."""
                 # Verify file has content
                 file_size = self.state_file.stat().st_size
                 if file_size > 0:
-                    print(f"💾 Bot state saved: {len(self.monitored_contacts)} contacts tracked (file size: {file_size} bytes)")
+                    test_count = len(self.test_contacts)
+                    real_count = len(real_monitored_contacts)
+                    total_count = len(self.monitored_contacts)
+                    if test_count > 0:
+                        print(f"💾 Bot state saved: {real_count} real customers tracked, {test_count} test contacts excluded (file size: {file_size} bytes)")
+                    else:
+                        print(f"💾 Bot state saved: {total_count} contacts tracked (file size: {file_size} bytes)")
                 else:
                     print(f"⚠️  Warning: State file is empty at {self.state_file}")
             else:
@@ -729,7 +774,8 @@ Keep responses concise and helpful."""
         message: str,
         media_path: Optional[str] = None,
         media_path_2: Optional[str] = None,
-        is_followup: bool = False
+        is_followup: bool = False,
+        test_message: bool = False
     ) -> bool:
         """
         Send message to a contact
@@ -740,6 +786,7 @@ Keep responses concise and helpful."""
             media_path: Optional path to main image/video file (sent after customer responds on first contact)
             media_path_2: Optional path to second image/video file (free product, sent immediately after first media)
             is_followup: If True, allow sending even if contact is already in monitored_contacts
+            test_message: If True, skip bot_state.json operations (reserved for real customers)
 
         Returns:
             True if sent successfully
@@ -765,46 +812,68 @@ Keep responses concise and helpful."""
                 return False
 
             # Check if this is the first time we're contacting this customer (initial offer)
-            is_first_contact = phone not in self.monitored_contacts
+            # For test messages, skip state checks (don't use bot_state.json)
+            is_first_contact = phone not in self.monitored_contacts if not test_message else True
             
             # If contact is already in monitored_contacts, skip sending initial offer (they've already been contacted)
             # BUT allow follow-ups to be sent (is_followup=True)
-            if not is_first_contact and not is_followup:
+            # Skip this check for test messages (test messages always send)
+            if not test_message and not is_first_contact and not is_followup:
                 print(f"   ℹ️  {phone} has already been contacted. Skipping initial offer.")
                 print(f"   💡 This contact is being monitored and will receive follow-ups if needed.")
                 return True  # Return True to indicate "success" (no error, just skipped)
             
             # If this is the first contact, start monitoring BEFORE sending (clears history and marks existing messages as seen)
             # But skip opening the chat since we're already in it
+            # For test messages, still monitor (in memory) but skip saving to bot_state.json
             if is_first_contact:
-                self.monitored_contacts.append(phone)
+                # Add to monitored contacts (in memory - for both test and real messages)
+                if phone not in self.monitored_contacts:
+                    self.monitored_contacts.append(phone)
+                
+                # Mark as test contact if this is a test message (skip bot_state.json for this contact)
+                if test_message:
+                    self.test_contacts.add(phone)
+                    print("   ℹ️  Test message: Contact marked as test contact (bot_state.json skipped)")
+                
+                # Start monitoring contact (in memory - enables AI responses)
                 self.start_monitoring_contact(phone, skip_chat_open=True)
-                # Initialize follow-up tracking for this customer
+                
+                # Initialize follow-up tracking for this customer (in memory)
                 self.last_contact_time[phone] = datetime.now()
                 self.customer_responded[phone] = False
                 self.followup_sent[phone] = False
-                # Save state after adding new contact (CRITICAL: must save immediately)
-                try:
-                    self._save_state()
-                except Exception as save_err:
-                    print(f"⚠️  Failed to save state after contacting {phone}: {save_err}")
-                    import traceback
-                    traceback.print_exc()
+                
+                # Save state to bot_state.json ONLY for real customers (skip for test messages)
+                if not test_message:
+                    try:
+                        self._save_state()
+                    except Exception as save_err:
+                        print(f"⚠️  Failed to save state after contacting {phone}: {save_err}")
+                        import traceback
+                        traceback.print_exc()
+                else:
+                    print("   ℹ️  Test message: Monitoring enabled (in memory), but bot_state.json skipped (reserved for real customers)")
             
             # Handle media sending logic
             # NEW FEATURE: On first contact, store media to send after customer responds
             # On subsequent messages (follow-ups, AI responses), send media immediately
+            # For both test messages and real customers: store media and send text only initially
             if media_path and os.path.exists(media_path):
                 # If this is the first contact, store media to send later (after customer responds)
+                # This works for both test messages (in memory) and real customers (saved to bot_state.json)
                 if is_first_contact:
                     # Convert to absolute path to ensure file can be found later
                     # This is important because the bot might be restarted from a different directory
                     media_abs_path = str(Path(media_path).absolute())
                     
-                    # Store main media absolute path for later sending
+                    # Store main media absolute path for later sending (in memory for all contacts)
                     self.pending_media[phone] = media_abs_path
                     self.media_sent_after_response[phone] = False
-                    print(f"   📎 Main media stored for {phone} - will be sent after customer responds")
+                    if test_message:
+                        print(f"   📎 Main media stored for {phone} (in memory) - will be sent after customer responds")
+                    else:
+                        print(f"   📎 Main media stored for {phone} - will be sent after customer responds")
                     print(f"   📁 Main media path: {media_abs_path}")
                     
                     # Store second media (free product) if provided
@@ -812,14 +881,20 @@ Keep responses concise and helpful."""
                         media_2_abs_path = str(Path(media_path_2).absolute())
                         self.pending_media_2[phone] = media_2_abs_path
                         self.media_2_sent_after_response[phone] = False
-                        print(f"   📎 Second media (free product) stored for {phone} - will be sent immediately after main media")
+                        if test_message:
+                            print(f"   📎 Second media (free product) stored for {phone} (in memory) - will be sent immediately after main media")
+                        else:
+                            print(f"   📎 Second media (free product) stored for {phone} - will be sent immediately after main media")
                         print(f"   📁 Second media path: {media_2_abs_path}")
                     
-                    # Save state to persist pending media
-                    try:
-                        self._save_state()
-                    except Exception as save_err:
-                        print(f"⚠️  Failed to save state after storing pending media: {save_err}")
+                    # Save state to persist pending media (only for real customers, skip for test messages)
+                    if not test_message:
+                        try:
+                            self._save_state()
+                        except Exception as save_err:
+                            print(f"⚠️  Failed to save state after storing pending media: {save_err}")
+                    else:
+                        print("   ℹ️  Test message: Media stored in memory (will be sent after response), bot_state.json skipped")
                     # Continue to send text message only (no media)
                     # Fall through to text-only sending below
                 else:
@@ -867,35 +942,43 @@ Keep responses concise and helpful."""
 
             self.messages_sent += 1
 
-            # If this is the first contact, add offer message to conversation history
-            # (History was already cleared in start_monitoring_contact above)
+            # Handle state operations (in memory for test messages, save to bot_state.json for real customers)
+            # For test messages, still track conversation history and monitor (in memory), but skip bot_state.json
             if is_first_contact:
-                # Add our offer message as assistant message (from bot)
+                # (History was already cleared in start_monitoring_contact above)
+                # Add our offer message to conversation history (in memory - for both test and real messages)
+                if phone not in self.conversations:
+                    self.conversations[phone] = []
                 self.conversations[phone].append({
                     "role": "assistant",
                     "content": message
                 })
                 print(f"   Added offer message to conversation history for {phone}")
                 
-                # Track contact time for follow-up (only set if not already set)
+                # Track contact time for follow-up (only set if not already set - in memory)
                 if phone not in self.last_contact_time:
                     self.last_contact_time[phone] = datetime.now()
                     self.customer_responded[phone] = False
                     self.followup_sent[phone] = False
                 
-                # Automatically start background monitoring if not already running
+                # Automatically start background monitoring if not already running (for both test and real messages)
+                # This enables AI auto-responses for test messages too
                 if not self.auto_monitoring_active:
                     self.start_auto_monitoring()
+                    print(f"   ✅ Auto-monitoring started - AI will respond to messages from {phone}")
                 else:
-                    print(f"   ✅ Auto-monitoring is already active for this contact")
+                    print(f"   ✅ Auto-monitoring is already active - AI will respond to messages from {phone}")
                 
-                # Save state again after message is sent (CRITICAL: ensure state is saved)
-                try:
-                    self._save_state()
-                except Exception as save_err:
-                    print(f"⚠️  Failed to save state after sending to {phone}: {save_err}")
-                    import traceback
-                    traceback.print_exc()
+                # Save state to bot_state.json ONLY for real customers (skip for test messages)
+                if not test_message:
+                    try:
+                        self._save_state()
+                    except Exception as save_err:
+                        print(f"⚠️  Failed to save state after sending to {phone}: {save_err}")
+                        import traceback
+                        traceback.print_exc()
+                else:
+                    print("   ℹ️  Test message: Conversation history and monitoring active (in memory), bot_state.json skipped")
             else:
                 # This is a follow-up or AI response - add to conversation history
                 # Initialize conversation history if it doesn't exist
@@ -2641,11 +2724,25 @@ Keep responses concise and helpful."""
                 
                 # Get list of contacts to monitor (thread-safe)
                 with self.monitoring_lock:
-                    # Only monitor contacts that are not stopped
-                    active_contacts = [
-                        phone for phone in self.monitored_contacts 
-                        if phone not in self.monitoring_stopped_contacts
-                    ]
+                    # If there are test contacts, only monitor test contacts (don't check real customers during testing)
+                    # This prevents checking all 76+ real customers when you're just testing
+                    if self.test_contacts:
+                        # Only monitor test contacts when testing
+                        active_contacts = [
+                            phone for phone in self.monitored_contacts 
+                            if phone in self.test_contacts 
+                            and phone not in self.monitoring_stopped_contacts
+                        ]
+                        # Only log this once per cycle to avoid spam
+                        if len(active_contacts) > 0 and len(active_contacts) < len(self.monitored_contacts):
+                            # There are test contacts, so we're only monitoring those (not real customers)
+                            pass  # Will be logged below with actual count
+                    else:
+                        # No test contacts, monitor all real customers normally
+                        active_contacts = [
+                            phone for phone in self.monitored_contacts 
+                            if phone not in self.monitoring_stopped_contacts
+                        ]
                 
                 if not active_contacts:
                     # No contacts to monitor, wait a bit and check again
@@ -2653,7 +2750,15 @@ Keep responses concise and helpful."""
                     continue
                 
                 # Use optimized batch checking (faster sequential with reduced waits)
-                print(f"⚡ Checking {len(active_contacts)} contacts efficiently...")
+                if self.test_contacts and len(active_contacts) > 0:
+                    # Only monitoring test contacts (not real customers) - this is a test scenario
+                    total_real = len([c for c in self.monitored_contacts if c not in self.test_contacts])
+                    if total_real > 0:
+                        print(f"⚡ Checking {len(active_contacts)} test contact(s) only (skipping {total_real} real customers during testing)...")
+                    else:
+                        print(f"⚡ Checking {len(active_contacts)} test contact(s)...")
+                else:
+                    print(f"⚡ Checking {len(active_contacts)} contacts efficiently...")
                 try:
                     # Check all contacts using optimized method (reduced waits, less logging)
                     contact_messages = self._check_all_contacts_parallel(active_contacts)

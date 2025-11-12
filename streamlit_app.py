@@ -868,17 +868,21 @@ with tab1:
                         st.info("Try formats like: +966501234567, 0501234567, or 966501234567")
                     else:
                         st.info(f"📤 Sending test message to {formatted_phone}...")
+                        st.info("ℹ️ Test message: bot_state.json will not be used (reserved for real customers)")
 
                         try:
                             # Parse message with variables
                             final_message = parse_message_template(test_message, test_name, formatted_phone, "")
 
-                            # Send message
+                            # Send message using main bot instance with test_message=True
+                            # This skips bot_state.json operations for test messages
+                            # The main bot (test_mode=False) will still use bot_state.json for CSV bulk sending
                             success = st.session_state.bot.send_message(
                                 phone=formatted_phone,
                                 message=final_message,
                                 media_path=str(test_media_path) if test_media_path else None,
-                                media_path_2=str(test_media_path_2) if test_media_path_2 else None
+                                media_path_2=str(test_media_path_2) if test_media_path_2 else None,
+                                test_message=True  # Skip bot_state.json for test messages
                             )
 
                             if success:

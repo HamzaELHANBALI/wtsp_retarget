@@ -269,11 +269,12 @@ def main():
     # Note: Follow-up messages are automatically loaded from followup_message.json
     # The bot will use the JSON file if it exists, otherwise it will use the default
     try:
-        bot = WhatsAppBot(system_prompt=SYSTEM_PROMPT)
+        # Initialize bot in test mode (skip bot_state.json - reserved for real customers)
+        bot = WhatsAppBot(system_prompt=SYSTEM_PROMPT, test_mode=True)
         # Configure follow-up settings (optional - defaults are in WhatsAppBot)
         # bot.followup_enabled = True  # Enable follow-ups (default: True)
         # bot.followup_delay_minutes = 60  # Delay before follow-up in minutes (default: 60)
-        print("✅ Bot initialized successfully")
+        print("✅ Bot initialized successfully (test mode - bot_state.json skipped)")
         print(f"   Follow-up enabled: {bot.followup_enabled}")
         print(f"   Follow-up delay: {bot.followup_delay_minutes} minutes")
     except Exception as e:
