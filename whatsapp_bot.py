@@ -817,8 +817,9 @@ Keep responses concise and helpful."""
             
             # If contact is already in monitored_contacts, skip sending initial offer (they've already been contacted)
             # BUT allow follow-ups to be sent (is_followup=True)
+            # BUT allow media to be sent (if media_path is provided, this is likely an AI response with media)
             # Skip this check for test messages (test messages always send)
-            if not test_message and not is_first_contact and not is_followup:
+            if not test_message and not is_first_contact and not is_followup and not media_path:
                 print(f"   ℹ️  {phone} has already been contacted. Skipping initial offer.")
                 print(f"   💡 This contact is being monitored and will receive follow-ups if needed.")
                 return True  # Return True to indicate "success" (no error, just skipped)
@@ -899,7 +900,13 @@ Keep responses concise and helpful."""
                     # Fall through to text-only sending below
                 else:
                     # Not first contact - send media immediately (follow-up or AI response)
-                    media_result = self._send_media(media_path, message)
+                    print(f"📤 Sending media with caption (caption length: {len(message) if message else 0})...")
+                    if message:
+                        print(f"   Caption preview: {message[:100]}...")
+                    else:
+                        print(f"   ⚠️  WARNING: No message provided! Media will be sent without caption!")
+                    print(f"   🔍 About to call _send_media with message='{message[:50] if message else 'EMPTY'}...'")
+                    media_result = self._send_media(media_path, message if message else "")
                     if media_result:
                         # Media sent successfully
                         print(f"✅ Message with media sent to {phone}")
@@ -1062,6 +1069,11 @@ Keep responses concise and helpful."""
         """Send media (image/video) with optional caption using drag-and-drop for video preview"""
         try:
             print(f"📎 Attaching media: {Path(media_path).name}")
+            print(f"🔍 _send_media called with caption length: {len(caption) if caption else 0}")
+            if caption:
+                print(f"   Caption preview: {caption[:100]}...")
+            else:
+                print(f"   ⚠️  No caption provided to _send_media")
 
             # CRITICAL: Ensure window is visible and focused
             # File uploads don't work reliably when window is minimized/background
@@ -1094,35 +1106,66 @@ Keep responses concise and helpful."""
             else:
                 print(f"🖼️ Sending image")
 
-            # STEP 1: Add caption FIRST (before attaching media)
-            # When media is attached, WhatsApp will use this text as the caption
+            # STEP 1: Type caption text FIRST (before attaching media)
+            # WhatsApp Web will use this text as the caption when media is attached
             if caption:
-                print(f"📝 Typing caption first (will become media caption)...")
+                print(f"📝 Typing caption text first (will become media caption)...")
                 try:
                     import pyperclip
                     import platform
-
-                    input_box = self.wait.until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, "[contenteditable='true'][data-tab='10']"))
-                    )
-
-                    # Focus input box
-                    input_box.click()
-                    time.sleep(0.3)
-
+                    
+                    # Ensure the input area is focused and visible
+                    print("🔍 Focusing chat input box...")
+                    try:
+                        # Scroll to bottom to ensure input area is visible
+                        self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                        time.sleep(0.5)
+                        
+                        # Find and focus the input box
+                        input_box = self.wait.until(
+                            EC.element_to_be_clickable((By.CSS_SELECTOR, "div[contenteditable='true'][data-tab='10']"))
+                        )
+                        # Scroll input into view
+                        self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", input_box)
+                        time.sleep(0.3)
+                        # Click to focus
+                        input_box.click()
+                        time.sleep(0.5)
+                        print("✅ Chat input box focused")
+                    except Exception as e:
+                        print(f"   ⚠️  Could not focus input: {e}")
+                        raise
+                    
+                    # Clear any existing text first
+                    try:
+                        input_box.clear()
+                        # Also use JavaScript to clear
+                        self.driver.execute_script("arguments[0].textContent = '';", input_box)
+                        self.driver.execute_script("arguments[0].innerText = '';", input_box)
+                        time.sleep(0.3)
+                    except Exception as e:
+                        print(f"   ℹ️  Could not clear input (might be empty already): {e}")
+                    
+                    # Focus the input again to ensure it's ready
+                    try:
+                        input_box.click()
+                        time.sleep(0.3)
+                    except:
+                        pass
+                    
                     # Use system clipboard to preserve line breaks
                     pyperclip.copy(caption)
                     print(f"📋 Caption copied to clipboard ({len(caption)} chars, {caption.count(chr(10))} line breaks)")
-
+                    
                     # Paste with Ctrl+V or Cmd+V
                     if platform.system() == 'Darwin':  # macOS
                         input_box.send_keys(Keys.COMMAND, 'v')
                     else:  # Windows/Linux
                         input_box.send_keys(Keys.CONTROL, 'v')
-
+                    
+                    time.sleep(1)  # Wait for paste to complete
                     print(f"✅ Caption pasted in chat input: {caption[:50]}...")
-                    time.sleep(1)
-
+                    
                     # Verify caption was pasted
                     caption_check = self.driver.execute_script(
                         """
@@ -1132,29 +1175,29 @@ Keep responses concise and helpful."""
                         input_box
                     )
                     print(f"✓ Caption in input box: {len(caption_check)} chars")
-
+                    if len(caption_check) < len(caption) * 0.5:  # If less than 50% of caption was pasted
+                        print(f"⚠️  Caption might not have been pasted correctly (expected {len(caption)} chars, got {len(caption_check)} chars)")
+                    else:
+                        print(f"✅ Caption text is ready in input box - will become media caption when media is attached")
+                    
                 except Exception as e:
-                    print(f"⚠️  Could not paste caption: {e}")
+                    print(f"⚠️  Could not type caption text: {e}")
                     import traceback
                     traceback.print_exc()
+                    print(f"   💡 Will try to attach media anyway (without caption)")
+            else:
+                print(f"ℹ️  No caption provided - media will be sent without caption")
 
-            # STEP 2: Click attachment button - try multiple selectors
+            # STEP 2: NOW attach media (the text in input box will automatically become the caption)
             print("📎 Opening attachment menu...")
             
-            # First, ensure the input area is focused and visible
+            # Ensure the input area is still focused
             try:
                 # Scroll to bottom to ensure input area is visible
                 self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                time.sleep(0.5)
-                
-                # Click on the input box to ensure focus
-                input_box = self.wait.until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "div[contenteditable='true'][data-tab='10']"))
-                )
-                input_box.click()
-                time.sleep(0.5)
-            except Exception as e:
-                print(f"   ℹ️  Could not focus input: {e}")
+                time.sleep(0.3)
+            except:
+                pass
 
             # Wait a bit for UI to settle
             time.sleep(0.5)
@@ -1575,18 +1618,18 @@ Keep responses concise and helpful."""
                 except Exception as e:
                     raise Exception(f"Could not find file input element: {str(e)}")
 
-            # STEP 3: Send file path to input
-            # This will close Finder and upload the file with the caption we typed earlier
+            # STEP 3: Send file path to input (the text already in input box will become the caption)
             print(f"📤 Sending file to WhatsApp...")
+            print(f"   💡 Note: Text already in input box will automatically become the media caption")
             try:
                 file_input.send_keys(abs_path)
                 print(f"✅ File path sent to input")
 
-                # Wait for Finder to close and upload to start
-                print("⏳ Waiting for Finder to close and upload to begin...")
-                time.sleep(3)
+                # Wait for Finder to close and media preview to appear
+                print("⏳ Waiting for Finder to close and media preview to appear...")
+                time.sleep(2)
 
-                # Verify upload started by checking if preview appeared
+                # Verify preview appeared
                 max_attempts = 5
                 preview_found = False
                 for attempt in range(max_attempts):
@@ -1600,27 +1643,44 @@ Keep responses concise and helpful."""
                     """)
 
                     if preview_exists:
-                        print(f"✅ Upload started, preview visible")
+                        print(f"✅ Media preview appeared (caption text should be preserved)")
                         preview_found = True
                         break
                     else:
                         if attempt < max_attempts - 1:
                             print(f"   Waiting for preview... (attempt {attempt + 1}/{max_attempts})")
-                            time.sleep(2)
+                            time.sleep(1)
 
                 if not preview_found:
-                    print(f"⚠️  Could not verify upload preview, but continuing...")
+                    print(f"⚠️  Could not verify media preview, but continuing...")
+
+                # Verify caption is still there (it should be - WhatsApp preserves text in input when attaching media)
+                if caption:
+                    try:
+                        caption_input = self.driver.find_element(By.CSS_SELECTOR, "div[contenteditable='true'][data-tab='10']")
+                        caption_check = self.driver.execute_script(
+                            """
+                            const el = arguments[0];
+                            return el.textContent || el.innerText || '';
+                            """,
+                            caption_input
+                        )
+                        if len(caption_check) > 0:
+                            print(f"✅ Caption text preserved in media preview ({len(caption_check)} chars)")
+                        else:
+                            print(f"⚠️  Caption text might have been cleared - media will be sent without caption")
+                    except:
+                        print(f"   ℹ️  Could not verify caption text (media should still send)")
 
             except Exception as e:
                 print(f"⚠️  Error sending file path: {e}")
                 raise
-
-            # STEP 4: Wait for upload to complete
-            # Caption should already be there from Step 1
+            
+            # STEP 5: Wait for upload to complete
             print("⏳ Waiting for video to finish uploading...")
             time.sleep(4)
 
-            # STEP 5: Click send button - try multiple methods
+            # STEP 6: Click send button - try multiple methods
             print("📤 Looking for send button...")
 
             send_success = False
@@ -2785,7 +2845,17 @@ Keep responses concise and helpful."""
                                 # Reset follow-up flag since customer responded
                                 self.followup_sent[phone] = False
                             
-                            # NEW FEATURE: Send pending media after customer's first response
+                            # Generate AI response FIRST (before sending media)
+                            ai_response = None
+                            pending_media_path = None
+                            pending_media_2_path = None
+                            
+                            if self.ai_enabled:
+                                print(f"   🤖 Generating AI response...")
+                                ai_response = self.generate_ai_response(new_msg, phone)
+                            
+                            # Check if this is first response and we have pending media
+                            # Main media should be attached to the AI response
                             if is_first_response and phone in self.pending_media:
                                 pending_media_path = self.pending_media[phone]
                                 # Check if media hasn't been sent yet
@@ -2793,82 +2863,84 @@ Keep responses concise and helpful."""
                                     # Ensure path is absolute (in case it was stored as relative)
                                     pending_media_path = str(Path(pending_media_path).absolute())
                                     
-                                    if os.path.exists(pending_media_path):
-                                        print(f"   📎 Sending main media to {phone}...")
-                                        print(f"   📁 Main media file: {Path(pending_media_path).name}")
-                                        # Open chat for this contact (required for sending media)
-                                        if self._open_chat_safely(phone):
-                                            # Send main media with empty caption
-                                            # The original message was already sent, so we send media separately
-                                            media_sent = self._send_media(pending_media_path, "")
-                                            if media_sent:
-                                                self.media_sent_after_response[phone] = True
-                                                print(f"   ✅ Main media sent successfully to {phone}")
-                                                # Add media reference to conversation history
-                                                if phone not in self.conversations:
-                                                    self.conversations[phone] = []
-                                                self.conversations[phone].append({
-                                                    "role": "assistant",
-                                                    "content": f"[Main media sent: {Path(pending_media_path).name}]"
-                                                })
-                                                
-                                                # Send second media (free product) immediately after main media
-                                                if phone in self.pending_media_2:
-                                                    pending_media_2_path = self.pending_media_2[phone]
-                                                    if not self.media_2_sent_after_response.get(phone, False):
-                                                        pending_media_2_path = str(Path(pending_media_2_path).absolute())
-                                                        
-                                                        if os.path.exists(pending_media_2_path):
-                                                            print(f"   📎 Sending second media (free product) to {phone}...")
-                                                            print(f"   📁 Second media file: {Path(pending_media_2_path).name}")
-                                                            # Small delay between media sends
-                                                            time.sleep(2)
-                                                            media_2_sent = self._send_media(pending_media_2_path, "")
-                                                            if media_2_sent:
-                                                                self.media_2_sent_after_response[phone] = True
-                                                                print(f"   ✅ Second media (free product) sent successfully to {phone}")
-                                                                self.conversations[phone].append({
-                                                                    "role": "assistant",
-                                                                    "content": f"[Free product media sent: {Path(pending_media_2_path).name}]"
-                                                                })
-                                                            else:
-                                                                print(f"   ⚠️  Failed to send second media to {phone}")
-                                                        else:
-                                                            print(f"   ⚠️  Second media file not found: {pending_media_2_path}")
-                                                            del self.pending_media_2[phone]
-                                                
-                                                # Save state after sending media
-                                                self._save_state()
-                                            else:
-                                                print(f"   ⚠️  Failed to send main media to {phone}")
-                                        else:
-                                            print(f"   ⚠️  Failed to open chat for {phone} - cannot send media")
-                                    else:
+                                    if not os.path.exists(pending_media_path):
                                         print(f"   ⚠️  Pending media file not found: {pending_media_path}")
                                         print(f"   💡 Make sure the media file exists and wasn't deleted")
                                         # Remove invalid pending media
                                         del self.pending_media[phone]
                                         if phone in self.pending_media_2:
                                             del self.pending_media_2[phone]
-                                        self._save_state()
+                                        pending_media_path = None
+                                    
+                                    # Check for second media
+                                    if phone in self.pending_media_2:
+                                        pending_media_2_path = self.pending_media_2[phone]
+                                        pending_media_2_path = str(Path(pending_media_2_path).absolute())
+                                        if not os.path.exists(pending_media_2_path):
+                                            print(f"   ⚠️  Second media file not found: {pending_media_2_path}")
+                                            del self.pending_media_2[phone]
+                                            pending_media_2_path = None
                             
-                            # Save state after customer responds
-                            self._save_state()
-                            
-                            # Generate AI response
-                            if self.ai_enabled:
-                                print(f"   🤖 Generating AI response...")
-                                ai_response = self.generate_ai_response(new_msg, phone)
+                            # Send AI response WITH main media (if first response and media exists)
+                            if ai_response:
+                                print(f"   📤 Sending AI response{' with main media' if pending_media_path and is_first_response else ''}...")
                                 
-                                # Send response
-                                print(f"   📤 Sending AI response...")
-                                if self.send_message(phone, ai_response):
-                                    self.ai_responses_sent += 1
-                                    print(f"   ✅ Response sent successfully to {phone}")
+                                # Send AI response with main media attached (if first response)
+                                if is_first_response and pending_media_path and not self.media_sent_after_response.get(phone, False):
+                                    # Send AI response WITH main media attached
+                                    if self.send_message(phone, ai_response, media_path=pending_media_path):
+                                        self.ai_responses_sent += 1
+                                        self.media_sent_after_response[phone] = True
+                                        print(f"   ✅ AI response with main media sent successfully to {phone}")
+                                        
+                                        # Add to conversation history
+                                        if phone not in self.conversations:
+                                            self.conversations[phone] = []
+                                        self.conversations[phone].append({
+                                            "role": "assistant",
+                                            "content": f"{ai_response} [Main media attached: {Path(pending_media_path).name}]"
+                                        })
+                                        
+                                        # NOW send second media separately (after a short delay)
+                                        if pending_media_2_path and not self.media_2_sent_after_response.get(phone, False):
+                                            print(f"   📎 Sending second media (free product) to {phone}...")
+                                            print(f"   📁 Second media file: {Path(pending_media_2_path).name}")
+                                            # Small delay between messages
+                                            time.sleep(3)
+                                            
+                                            # Send second media with empty caption
+                                            if self._open_chat_safely(phone):
+                                                media_2_sent = self._send_media(pending_media_2_path, "")
+                                                if media_2_sent:
+                                                    self.media_2_sent_after_response[phone] = True
+                                                    print(f"   ✅ Second media (free product) sent successfully to {phone}")
+                                                    self.conversations[phone].append({
+                                                        "role": "assistant",
+                                                        "content": f"[Free product media sent: {Path(pending_media_2_path).name}]"
+                                                    })
+                                                else:
+                                                    print(f"   ⚠️  Failed to send second media to {phone}")
+                                            else:
+                                                print(f"   ⚠️  Failed to open chat for {phone} - cannot send second media")
+                                        
+                                        # Save state after sending media
+                                        self._save_state()
+                                    else:
+                                        print(f"   ❌ Failed to send AI response with main media to {phone}")
                                 else:
-                                    print(f"   ❌ Failed to send response to {phone}")
+                                    # No media, just send AI response as text
+                                    if self.send_message(phone, ai_response):
+                                        self.ai_responses_sent += 1
+                                        print(f"   ✅ AI response sent successfully to {phone}")
+                                    else:
+                                        print(f"   ❌ Failed to send AI response to {phone}")
                             else:
+                                # AI not enabled - no response generated
                                 print(f"   ⚠️  AI not enabled - skipping response")
+                            
+                            # Save state after customer responds (skip for test contacts)
+                            if phone not in self.test_contacts:
+                                self._save_state()
                     
                     # Check for follow-ups (customers who didn't respond)
                     if self.followup_enabled and not self.bulk_sending_active:
