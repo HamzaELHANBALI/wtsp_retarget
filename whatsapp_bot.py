@@ -180,6 +180,7 @@ Keep responses concise and helpful."""
         self.conversations: Dict[str, List[Dict]] = {}
         self.last_messages: Dict[str, str] = {}  # Legacy text-based tracking
         self.seen_message_ids: Dict[str, set] = {}  # New ID-based tracking
+        self.seen_message_texts: Dict[str, set] = {}  # Text fingerprint tracking
         self.monitored_contacts: List[str] = []
         self.test_contacts: set = set()  # Track test contacts (skip bot_state.json for these)
         
