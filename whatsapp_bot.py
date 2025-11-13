@@ -2400,6 +2400,8 @@ Keep responses concise and helpful."""
                     print(f"   ✅ Found {len(new_messages)} new message(s) out of {total_messages} total")
                 else:
                     print(f"   ℹ️  No new messages found (all {total_messages} messages already seen)")
+                    # CRITICAL: If no new messages, return None immediately to prevent processing old messages
+                    return None
 
                 # If we found new messages, mark them as seen and return the FIRST new one
                 if new_messages:
