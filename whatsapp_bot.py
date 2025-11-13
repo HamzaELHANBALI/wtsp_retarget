@@ -45,7 +45,8 @@ class WhatsAppBot:
         system_prompt: Optional[str] = None,
         headless: bool = False,
         contacts_df = None,
-        test_mode: bool = False
+        test_mode: bool = False,
+        state_file: Optional[str] = None
     ):
         """
         Initialize WhatsApp Bot
@@ -56,6 +57,7 @@ class WhatsAppBot:
             headless: Run browser in headless mode (not recommended for WhatsApp)
             contacts_df: DataFrame with customer data (name, phone, address/city)
             test_mode: If True, skip loading/saving bot_state.json (reserved for real customers)
+            state_file: Custom state file name (e.g., "bot_state_smoking.json"). Default: "bot_state.json"
         """
         # Load environment variables
         load_dotenv()
@@ -222,7 +224,12 @@ Keep responses concise and helpful."""
 
         # State persistence (to remember contacted customers across restarts)
         # Skip bot_state.json operations in test mode (reserved for real customers)
-        self.state_file = Path.cwd() / "bot_state.json"
+        # Allow custom state file name for different clientele (e.g., "bot_state_smoking.json")
+        if state_file:
+            self.state_file = Path.cwd() / state_file
+        else:
+            self.state_file = Path.cwd() / "bot_state.json"
+        
         if not self.test_mode:
             self._load_state()  # Load previous state on startup
         else:

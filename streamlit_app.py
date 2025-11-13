@@ -298,6 +298,54 @@ with st.sidebar:
         index=0,
         help="Select your country code for phone number formatting"
     )
+    
+    # Bot State File Selection (for different clientele)
+    st.divider()
+    st.subheader("📊 Customer Database")
+    state_file_options = {
+        "Default": "bot_state.json",
+        "Smoking Clientele": "bot_state_smoking.json"
+    }
+    
+    if 'selected_state_file' not in st.session_state:
+        st.session_state.selected_state_file = "Smoking Clientele"
+    
+    # Calculate default index (Smoking Clientele is default)
+    default_index = list(state_file_options.keys()).index(st.session_state.selected_state_file) if st.session_state.selected_state_file in state_file_options else list(state_file_options.keys()).index("Smoking Clientele")
+    
+    selected_clientele = st.selectbox(
+        "Customer Database",
+        options=list(state_file_options.keys()),
+        index=default_index,
+        help="Select which customer database to use. Each database tracks contacts separately.",
+        key="clientele_selector"
+    )
+    
+    # Check if selection changed and bot is already initialized (before updating session state)
+    previous_selection = st.session_state.get('selected_state_file', 'Smoking Clientele')
+    if selected_clientele != previous_selection and st.session_state.logged_in:
+        st.warning("⚠️ Customer database changed! Please logout and reinitialize the bot to use the new database.")
+    
+    # Update session state
+    st.session_state.selected_state_file = selected_clientele
+    selected_state_file = state_file_options[selected_clientele]
+    
+    # Show info about the selected state file
+    state_file_path = Path(selected_state_file)
+    if state_file_path.exists():
+        file_size = state_file_path.stat().st_size
+        # Try to load and show stats
+        try:
+            with open(state_file_path, 'r', encoding='utf-8') as f:
+                state_data = json.load(f)
+                monitored_count = len(state_data.get('monitored_contacts', []))
+                st.caption(f"📄 Using: {selected_state_file} ({file_size:,} bytes, {monitored_count} contacts)")
+        except:
+            st.caption(f"📄 Using: {selected_state_file} ({file_size:,} bytes)")
+    else:
+        st.caption(f"📄 Will create: {selected_state_file} (new database)")
+    
+    st.caption("💡 Each database tracks its own contacts, conversation history, and follow-ups separately.")
 
     # System Prompt
     with st.expander("🤖 AI System Prompt"):
@@ -651,11 +699,19 @@ Always have it home. 90% choose 3-pack - smarter 💡 Reconsider?"
             with st.spinner(spinner_text):
                 try:
                     # Initialize bot
+                    # Get selected state file from session state
+                    state_file_options_map = {
+                        "Default": "bot_state.json",
+                        "Smoking Clientele": "bot_state_smoking.json"
+                    }
+                    selected_state_file_name = state_file_options_map.get(st.session_state.get('selected_state_file', 'Smoking Clientele'), "bot_state_smoking.json")
+                    
                     st.session_state.bot = WhatsAppBot(
                         openai_api_key=openai_api_key if openai_api_key else None,
                         system_prompt=system_prompt,
                         headless=False,
-                        contacts_df=st.session_state.contacts_df
+                        contacts_df=st.session_state.contacts_df,
+                        state_file=selected_state_file_name
                     )
                     st.session_state.logged_in = True
                     success_msg = "✅ Bot reconnected! Check the browser window." if has_saved_session else "✅ Bot initialized! You should see WhatsApp Web in a browser window."
