@@ -2468,6 +2468,16 @@ Keep responses concise and helpful."""
                             if verbose:
                                 print(f"✅ Found message with selector: {selector}")
                             if last_msg:
+                                # Check against baseline to prevent responding to old messages
+                                msg_text_fingerprint = last_msg[:100] if len(last_msg) > 100 else last_msg
+                                baseline_texts = getattr(self, '_baseline_message_texts', {}).get(phone, set())
+
+                                # Skip if this message text is in the baseline (old message)
+                                if msg_text_fingerprint in baseline_texts:
+                                    if verbose:
+                                        print(f"ℹ️  Fallback: Message text in baseline (old message), skipping")
+                                    return None
+
                                 # Use text-based tracking as fallback
                                 last_seen = self.last_messages.get(phone, "")
                                 if last_msg != last_seen:
