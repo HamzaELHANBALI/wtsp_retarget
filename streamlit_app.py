@@ -70,8 +70,8 @@ def load_noura_prompt(prompt_file_name=None):
         prompt_file_name: Name of the prompt file to load (e.g., 'noura_prompt.json', 'noura_lighter_watch_bundle_prompt.json')
                          If None, tries default files in order: noura_lighter_watch_bundle_prompt.json, noura_electric_ashtray_prompt.json, noura_prompt.json
     """
-    # Default priority: lighter watch bundle (new default), then electric ashtray, then tiger balm (old)
-    default_files = ["noura_lighter_watch_bundle_prompt.json", "noura_electric_ashtray_prompt.json", "noura_prompt.json"]
+    # Default priority: ultimate closer (new default), then lighter watch bundle, then electric ashtray, then tiger balm (old)
+    default_files = ["noura_ultimate_closer_prompt.json", "noura_lighter_watch_bundle_prompt.json", "noura_electric_ashtray_prompt.json", "noura_prompt.json"]
     
     files_to_try = [prompt_file_name] if prompt_file_name else default_files
     
@@ -98,8 +98,9 @@ def list_available_prompt_files():
     for file in Path(".").glob("noura*_prompt.json"):
         if file.is_file():
             prompt_files.append(file.name)
-    # Sort to have lighter watch bundle first (default), then electric ashtray
+    # Sort to have ultimate closer first (default), then lighter watch bundle, then electric ashtray
     prompt_files.sort(key=lambda x: (
+        x != "noura_ultimate_closer_prompt.json",
         x != "noura_lighter_watch_bundle_prompt.json",
         x != "noura_electric_ashtray_prompt.json",
         x
@@ -306,7 +307,7 @@ with st.sidebar:
         # Initialize selected_prompt_file in session state if not exists
         if 'selected_prompt_file' not in st.session_state:
             # Default to lighter watch bundle if available
-            default_prompt_file = "noura_lighter_watch_bundle_prompt.json"
+            default_prompt_file = "noura_ultimate_closer_prompt.json"
             if default_prompt_file in available_prompts:
                 st.session_state.selected_prompt_file = default_prompt_file
             elif available_prompts:
