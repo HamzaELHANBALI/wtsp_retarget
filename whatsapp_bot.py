@@ -3220,6 +3220,13 @@ Keep responses concise and helpful."""
                             print(f"\n📨 New message from {phone}!")
                             print(f"   Customer: {new_msg[:100]}...")
                             
+                            # CRITICAL: Mark this message as seen IMMEDIATELY to prevent duplicate processing
+                            # This prevents the same message from being detected as new again
+                            msg_text_fingerprint = new_msg[:100] if len(new_msg) > 100 else new_msg
+                            if phone not in self.seen_message_texts:
+                                self.seen_message_texts[phone] = set()
+                            self.seen_message_texts[phone].add(msg_text_fingerprint)
+                            
                             # Mark customer as responded (for follow-up tracking)
                             is_first_response = False
                             if phone in self.last_contact_time:
