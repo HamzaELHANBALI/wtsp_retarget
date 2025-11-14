@@ -1,0 +1,4 @@
+{
+  "message_template": "مرحباً {name}! 👋\n\nنشكرك على وقتك. نود أن نتأكد أنك رأيت عرضك VIP الحصري—ساعة ولاعة فاخرة + منفضة ذكية مجاناً! 🎁⌚\n\nهل لديك أي أسئلة؟ نحن هنا للمساعدة! 💬",
+  "description": "Follow-up message template sent to customers who haven't responded. Use {name} and {phone} as placeholders."
+}

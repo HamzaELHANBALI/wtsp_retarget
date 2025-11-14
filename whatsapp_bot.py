@@ -8,6 +8,7 @@ import time
 import random
 import csv
 import re
+import json
 import threading
 from typing import Optional, List, Dict
 from datetime import datetime
@@ -43,7 +44,9 @@ class WhatsAppBot:
         openai_api_key: Optional[str] = None,
         system_prompt: Optional[str] = None,
         headless: bool = False,
-        contacts_df = None
+        contacts_df = None,
+        test_mode: bool = False,
+        state_file: Optional[str] = None
     ):
         """
         Initialize WhatsApp Bot
@@ -53,12 +56,17 @@ class WhatsAppBot:
             system_prompt: Custom AI system prompt
             headless: Run browser in headless mode (not recommended for WhatsApp)
             contacts_df: DataFrame with customer data (name, phone, address/city)
+            test_mode: If True, skip loading/saving bot_state.json (reserved for real customers)
+            state_file: Custom state file name (e.g., "bot_state_smoking.json"). Default: "bot_state.json"
         """
         # Load environment variables
         load_dotenv()
 
         # Store contacts dataframe for customer lookup
         self.contacts_df = contacts_df
+        
+        # Test mode flag (skip bot_state.json operations when True)
+        self.test_mode = test_mode
 
         # Setup OpenAI
         api_key = openai_api_key or os.getenv('OPENAI_API_KEY')
@@ -172,7 +180,25 @@ Keep responses concise and helpful."""
         self.conversations: Dict[str, List[Dict]] = {}
         self.last_messages: Dict[str, str] = {}  # Legacy text-based tracking
         self.seen_message_ids: Dict[str, set] = {}  # New ID-based tracking
+        self.seen_message_texts: Dict[str, set] = {}  # Text fingerprint tracking
         self.monitored_contacts: List[str] = []
+        self.test_contacts: set = set()  # Track test contacts (skip bot_state.json for these)
+        
+        # Follow-up (relance) tracking
+        self.last_contact_time: Dict[str, datetime] = {}  # When we last contacted each customer
+        self.customer_responded: Dict[str, bool] = {}  # Whether customer responded after our last contact
+        self.followup_sent: Dict[str, bool] = {}  # Whether we already sent a follow-up
+        self.followup_enabled = True  # Enable/disable follow-up feature
+        self.followup_delay_minutes = 60  # Default: 60 minutes (1 hour) before follow-up
+        self.followup_message_template = None  # Custom follow-up message (None = use default from JSON)
+        # Load default follow-up message from JSON file
+        self.default_followup_template = self._load_followup_message_from_json()
+        
+        # Pending media tracking (media to send after customer responds)
+        self.pending_media: Dict[str, str] = {}  # {phone: media_path} - Main media to send after first customer response
+        self.pending_media_2: Dict[str, str] = {}  # {phone: media_path} - Second media (free product) to send immediately after first media
+        self.media_sent_after_response: Dict[str, bool] = {}  # Track if main media was already sent after response
+        self.media_2_sent_after_response: Dict[str, bool] = {}  # Track if second media was already sent after response
         
         # Automatic monitoring
         self.auto_monitoring_active = False
@@ -180,6 +206,11 @@ Keep responses concise and helpful."""
         self.monitoring_stopped_contacts: set = set()  # Contacts that have monitoring stopped
         self.monitoring_check_interval = 5  # Check every 5 seconds
         self.monitoring_lock = threading.Lock()  # Lock for thread-safe operations
+        
+        # Browser synchronization (prevent race conditions when switching chats)
+        self.browser_lock = threading.Lock()  # Lock for browser operations (driver.get, etc.)
+        self.current_chat_phone: Optional[str] = None  # Track which chat is currently open
+        self.bulk_sending_active = False  # Flag to pause background monitoring during bulk sending
 
         # Statistics
         self.messages_sent = 0
@@ -191,6 +222,19 @@ Keep responses concise and helpful."""
         # Leads tracking
         self.leads_file = Path.cwd() / "confirmed_leads.csv"
         self._initialize_leads_file()
+
+        # State persistence (to remember contacted customers across restarts)
+        # Skip bot_state.json operations in test mode (reserved for real customers)
+        # Allow custom state file name for different clientele (e.g., "bot_state_smoking.json")
+        if state_file:
+            self.state_file = Path.cwd() / state_file
+        else:
+            self.state_file = Path.cwd() / "bot_state.json"
+        
+        if not self.test_mode:
+            self._load_state()  # Load previous state on startup
+        else:
+            print("ℹ️  Test mode enabled - skipping bot_state.json (reserved for real customers)")
 
         # Setup browser
         self.driver = None
@@ -534,11 +578,212 @@ Keep responses concise and helpful."""
         except Exception as e:
             print(f"⚠️  Failed to update lead status: {e}")
 
+    def _load_state(self):
+        """Load bot state from file (monitored contacts, contact times, etc.)"""
+        # Skip loading state in test mode (reserved for real customers)
+        if self.test_mode:
+            print("ℹ️  Test mode: Skipping bot_state.json load")
+            return
+        
+        if self.state_file.exists():
+            try:
+                with open(self.state_file, 'r', encoding='utf-8') as f:
+                    state = json.load(f)
+                
+                # Load monitored contacts
+                self.monitored_contacts = state.get('monitored_contacts', [])
+                
+                # Load last contact times (convert ISO strings back to datetime)
+                last_contact_times = state.get('last_contact_time', {})
+                for phone, time_str in last_contact_times.items():
+                    try:
+                        self.last_contact_time[phone] = datetime.fromisoformat(time_str)
+                    except (ValueError, AttributeError):
+                        # Skip invalid timestamps
+                        pass
+                
+                # Load customer response status
+                self.customer_responded = state.get('customer_responded', {})
+                
+                # Load follow-up status
+                self.followup_sent = state.get('followup_sent', {})
+                
+                # Load pending media (media to send after customer responds)
+                self.pending_media = state.get('pending_media', {})
+                self.pending_media_2 = state.get('pending_media_2', {})
+                self.media_sent_after_response = state.get('media_sent_after_response', {})
+                self.media_2_sent_after_response = state.get('media_2_sent_after_response', {})
+                
+                # Load seen message IDs and texts (convert lists back to sets)
+                seen_message_ids_dict = state.get('seen_message_ids', {})
+                self.seen_message_ids = {
+                    phone: set(ids) for phone, ids in seen_message_ids_dict.items()
+                }
+                seen_message_texts_dict = state.get('seen_message_texts', {})
+                self.seen_message_texts = {
+                    phone: set(texts) for phone, texts in seen_message_texts_dict.items()
+                }
+                
+                print(f"✅ Loaded bot state: {len(self.monitored_contacts)} contacted customers")
+                if self.monitored_contacts:
+                    print(f"   📋 Previously contacted: {len(self.monitored_contacts)} customers")
+                    print(f"   ⏰ Contact times tracked: {len(self.last_contact_time)}")
+                    responded_count = sum(1 for v in self.customer_responded.values() if v)
+                    print(f"   💬 Responses tracked: {responded_count}")
+                    followup_count = sum(1 for v in self.followup_sent.values() if v)
+                    print(f"   📬 Follow-ups sent: {followup_count}")
+            except Exception as e:
+                print(f"⚠️  Error loading bot state: {e}")
+                print("   Starting with fresh state")
+        else:
+            print("ℹ️  No previous bot state found - starting fresh")
+
+    def _save_state(self):
+        """Save bot state to file (monitored contacts, contact times, etc.)"""
+        # Skip saving state in test mode OR if all monitored contacts are test contacts (reserved for real customers)
+        if self.test_mode:
+            # Don't print every time to avoid spam, but log occasionally if needed
+            return
+        
+        # Filter out test contacts from state (don't save test contacts to bot_state.json)
+        real_monitored_contacts = [c for c in self.monitored_contacts if c not in self.test_contacts]
+        
+        # If all contacts are test contacts, skip saving (no real customers to save)
+        if not real_monitored_contacts and self.monitored_contacts:
+            # All monitored contacts are test contacts - skip saving
+            return
+        
+        try:
+            # Convert datetime objects to ISO strings for JSON serialization
+            last_contact_times_iso = {
+                phone: time.isoformat() if isinstance(time, datetime) else str(time)
+                for phone, time in self.last_contact_time.items()
+            }
+            
+            # Convert sets to lists for JSON serialization
+            seen_message_ids_dict = {
+                phone: list(ids) for phone, ids in self.seen_message_ids.items()
+            }
+            seen_message_texts_dict = {
+                phone: list(texts) for phone, texts in self.seen_message_texts.items()
+            }
+            
+            # Filter out test contacts from all state dictionaries (don't save test contacts to bot_state.json)
+            real_last_contact_time = {k: v for k, v in last_contact_times_iso.items() if k not in self.test_contacts}
+            real_customer_responded = {k: v for k, v in self.customer_responded.items() if k not in self.test_contacts}
+            real_followup_sent = {k: v for k, v in self.followup_sent.items() if k not in self.test_contacts}
+            real_pending_media = {k: v for k, v in self.pending_media.items() if k not in self.test_contacts}
+            real_pending_media_2 = {k: v for k, v in self.pending_media_2.items() if k not in self.test_contacts}
+            real_media_sent_after_response = {k: v for k, v in self.media_sent_after_response.items() if k not in self.test_contacts}
+            real_media_2_sent_after_response = {k: v for k, v in self.media_2_sent_after_response.items() if k not in self.test_contacts}
+            real_seen_message_ids = {k: v for k, v in seen_message_ids_dict.items() if k not in self.test_contacts}
+            real_seen_message_texts = {k: v for k, v in seen_message_texts_dict.items() if k not in self.test_contacts}
+            
+            state = {
+                'monitored_contacts': real_monitored_contacts,  # Only real customers (no test contacts)
+                'last_contact_time': real_last_contact_time,
+                'customer_responded': real_customer_responded,
+                'followup_sent': real_followup_sent,
+                'pending_media': real_pending_media,
+                'pending_media_2': real_pending_media_2,
+                'media_sent_after_response': real_media_sent_after_response,
+                'media_2_sent_after_response': real_media_2_sent_after_response,
+                'seen_message_ids': real_seen_message_ids,
+                'seen_message_texts': real_seen_message_texts,
+                'last_saved': datetime.now().isoformat()
+            }
+            
+            # Save to file atomically (write to temp file, then rename)
+            temp_file = self.state_file.with_suffix('.tmp')
+            
+            # Ensure directory exists
+            self.state_file.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Write to temp file
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                json.dump(state, f, indent=2, ensure_ascii=False)
+            
+            # Atomic rename (works on both Unix and Windows)
+            temp_file.replace(self.state_file)
+            
+            # Verify file was written
+            if self.state_file.exists():
+                # Verify file has content
+                file_size = self.state_file.stat().st_size
+                if file_size > 0:
+                    test_count = len(self.test_contacts)
+                    real_count = len(real_monitored_contacts)
+                    total_count = len(self.monitored_contacts)
+                    if test_count > 0:
+                        print(f"💾 Bot state saved: {real_count} real customers tracked, {test_count} test contacts excluded (file size: {file_size} bytes)")
+                    else:
+                        print(f"💾 Bot state saved: {total_count} contacts tracked (file size: {file_size} bytes)")
+                else:
+                    print(f"⚠️  Warning: State file is empty at {self.state_file}")
+            else:
+                print(f"⚠️  Warning: State file was not created at {self.state_file}")
+                print(f"   Attempted to write to: {temp_file}")
+            
+        except Exception as e:
+            print(f"⚠️  Error saving bot state: {e}")
+            import traceback
+            traceback.print_exc()
+            # Try to save to a backup location
+            try:
+                backup_file = Path.cwd() / "bot_state_backup.json"
+                with open(backup_file, 'w', encoding='utf-8') as f:
+                    json.dump({
+                        'monitored_contacts': self.monitored_contacts,
+                        'last_contact_time': {k: v.isoformat() if isinstance(v, datetime) else str(v) for k, v in self.last_contact_time.items()},
+                        'customer_responded': self.customer_responded,
+                        'followup_sent': self.followup_sent,
+                        'last_saved': datetime.now().isoformat()
+                    }, f, indent=2, ensure_ascii=False)
+                print(f"💾 Saved backup state to {backup_file}")
+            except Exception as backup_err:
+                print(f"❌ Failed to save backup state: {backup_err}")
+
+    def _open_chat_safely(self, phone: str, force: bool = False) -> bool:
+        """
+        Safely open a chat with thread-safe locking and current chat tracking.
+        
+        Args:
+            phone: Phone number to open chat for
+            force: If True, open even if already in this chat (for refresh)
+            
+        Returns:
+            True if chat opened successfully, False otherwise
+        """
+        phone = self._format_phone(phone)
+        
+        with self.browser_lock:
+            # Check if we're already in this chat
+            if not force and self.current_chat_phone == phone:
+                # Already in the correct chat, no need to switch
+                return True
+            
+            try:
+                # Open chat
+                url = f"https://web.whatsapp.com/send?phone={phone.replace('+', '')}"
+                self.driver.get(url)
+                self.current_chat_phone = phone
+                
+                # Reduced wait time for faster checking (was 3-5s, now 2-3s)
+                time.sleep(random.uniform(2, 3))
+                return True
+            except Exception as e:
+                print(f"⚠️  Error opening chat for {phone}: {e}")
+                self.current_chat_phone = None
+                return False
+
     def send_message(
         self,
         phone: str,
         message: str,
-        media_path: Optional[str] = None
+        media_path: Optional[str] = None,
+        media_path_2: Optional[str] = None,
+        is_followup: bool = False,
+        test_message: bool = False
     ) -> bool:
         """
         Send message to a contact
@@ -546,7 +791,10 @@ Keep responses concise and helpful."""
         Args:
             phone: Phone number (e.g., "+966501234567")
             message: Message text (or caption if media provided)
-            media_path: Optional path to image/video file
+            media_path: Optional path to main image/video file (sent after customer responds on first contact)
+            media_path_2: Optional path to second image/video file (free product, sent immediately after first media)
+            is_followup: If True, allow sending even if contact is already in monitored_contacts
+            test_message: If True, skip bot_state.json operations (reserved for real customers)
 
         Returns:
             True if sent successfully
@@ -555,12 +803,11 @@ Keep responses concise and helpful."""
             phone = self._format_phone(phone)
             print(f"\n📤 Sending to {phone}...")
 
-            # Open chat
-            url = f"https://web.whatsapp.com/send?phone={phone.replace('+', '')}"
-            self.driver.get(url)
-
-            # Wait for chat to load
-            time.sleep(random.uniform(3, 5))
+            # Open chat safely (with lock to prevent race conditions)
+            if not self._open_chat_safely(phone):
+                print(f"❌ Failed to open chat for {phone}")
+                self.messages_failed += 1
+                return False
 
             # Check if number is valid (chat loaded)
             try:
@@ -573,71 +820,209 @@ Keep responses concise and helpful."""
                 return False
 
             # Check if this is the first time we're contacting this customer (initial offer)
-            is_first_contact = phone not in self.monitored_contacts
+            # For test messages, skip state checks (don't use bot_state.json)
+            is_first_contact = phone not in self.monitored_contacts if not test_message else True
             
-            # If this is the first contact, start monitoring BEFORE sending (clears history and marks existing messages as seen)
+            # CRITICAL: If this is the first contact, capture baseline messages BEFORE sending
+            # We're already in the chat (opened above), so we can safely get baseline messages
+            # These are messages that existed BEFORE we sent our message
             if is_first_contact:
-                self.monitored_contacts.append(phone)
-                self.start_monitoring_contact(phone)
+                # Add to monitored contacts (in memory - for both test and real messages)
+                if phone not in self.monitored_contacts:
+                    self.monitored_contacts.append(phone)
+                
+                # Mark as test contact if this is a test message (skip bot_state.json for this contact)
+                if test_message:
+                    self.test_contacts.add(phone)
+                    print("   ℹ️  Test message: Contact marked as test contact (bot_state.json skipped)")
+                
+                # Initialize conversation history
+                if phone not in self.conversations:
+                    self.conversations[phone] = []
+                
+                # Initialize seen_message_ids and seen_message_texts if needed
+                if phone not in self.seen_message_ids:
+                    self.seen_message_ids[phone] = set()
+                if phone not in self.seen_message_texts:
+                    self.seen_message_texts[phone] = set()
+                
+                # CRITICAL: Capture baseline messages BEFORE sending our initial message
+                # We're already in the chat, so we can get all current messages
+                # These are messages that existed BEFORE we sent our message
+                # We'll mark only these as seen, so any messages that appear after are considered "new"
+                print(f"   📋 Capturing baseline messages (messages that exist BEFORE our initial message)...")
+                baseline_message_ids = set()  # Store baseline message IDs for later verification
+                baseline_message_texts = set()  # Store baseline message text fingerprints
+                try:
+                    # Wait a moment for chat to fully stabilize
+                    time.sleep(1)
+                    
+                    # Get all current messages BEFORE sending our message (we're already in the chat)
+                    baseline_messages = self._get_all_current_messages_without_open(phone)
+                    baseline_count = len(baseline_messages) if baseline_messages else 0
+                    print(f"   📊 Found {baseline_count} baseline messages (existing before our initial message)")
+                    
+                    # Mark baseline messages as seen (these are old messages)
+                    if baseline_messages:
+                        marked_count = 0
+                        for msg in baseline_messages:
+                            msg_id = msg.get('id', '')
+                            msg_text = msg.get('text', '').strip()
+                            
+                            # Skip empty messages
+                            if not msg_text:
+                                continue
+                            
+                            # Store in baseline sets (for later verification)
+                            if msg_id:
+                                baseline_message_ids.add(msg_id)
+                            msg_text_fingerprint = msg_text[:100] if len(msg_text) > 100 else msg_text
+                            baseline_message_texts.add(msg_text_fingerprint)
+                            
+                            # Mark by ID
+                            if msg_id:
+                                self.seen_message_ids[phone].add(msg_id)
+                            
+                            # Mark by text fingerprint
+                            self.seen_message_texts[phone].add(msg_text_fingerprint)
+                            marked_count += 1
+                            
+                            # Debug: log what we're marking (first few messages)
+                            if marked_count <= 3:
+                                print(f"      📌 Baseline message {marked_count}: '{msg_text[:50]}...' (ID: {msg_id[:20] if msg_id else 'N/A'})")
+                        
+                        print(f"   ✅ Marked {marked_count} baseline messages as seen (out of {baseline_count} total)")
+                        print(f"   💡 Only messages sent AFTER our initial message will trigger AI responses")
+                        print(f"   🔍 Baseline: {len(self.seen_message_ids.get(phone, set()))} message IDs, {len(self.seen_message_texts.get(phone, set()))} text fingerprints")
+                        
+                        # Store baseline for later verification
+                        self._baseline_message_ids = getattr(self, '_baseline_message_ids', {})
+                        self._baseline_message_ids[phone] = baseline_message_ids
+                        self._baseline_message_texts = getattr(self, '_baseline_message_texts', {})
+                        self._baseline_message_texts[phone] = baseline_message_texts
+                    else:
+                        print(f"   ℹ️  No baseline messages found (new conversation)")
+                        # Initialize empty baseline sets
+                        self._baseline_message_ids = getattr(self, '_baseline_message_ids', {})
+                        self._baseline_message_ids[phone] = set()
+                        self._baseline_message_texts = getattr(self, '_baseline_message_texts', {})
+                        self._baseline_message_texts[phone] = set()
+                except Exception as e:
+                    print(f"   ⚠️  Could not capture baseline messages: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    # Initialize empty baseline sets on error
+                    self._baseline_message_ids = getattr(self, '_baseline_message_ids', {})
+                    self._baseline_message_ids[phone] = set()
+                    self._baseline_message_texts = getattr(self, '_baseline_message_texts', {})
+                    self._baseline_message_texts[phone] = set()
+                
+                # Initialize follow-up tracking for this customer (in memory)
+                self.last_contact_time[phone] = datetime.now()
+                self.customer_responded[phone] = False
+                self.followup_sent[phone] = False
             
-            # Send media if provided
+            # If contact is already in monitored_contacts, skip sending initial offer (they've already been contacted)
+            # BUT allow follow-ups to be sent (is_followup=True)
+            # BUT allow media to be sent (if media_path is provided, this is likely an AI response with media)
+            # BUT allow AI responses (if customer has responded, this is an ongoing conversation)
+            # Skip this check for test messages (test messages always send)
+            customer_has_responded = self.customer_responded.get(phone, False)
+            if not test_message and not is_first_contact and not is_followup and not media_path and not customer_has_responded:
+                print(f"   ℹ️  {phone} has already been contacted. Skipping initial offer.")
+                print(f"   💡 This contact is being monitored and will receive follow-ups if needed.")
+                return True  # Return True to indicate "success" (no error, just skipped)
+            
+            # If customer has responded, this is an ongoing conversation - allow all messages (AI responses, follow-ups, etc.)
+            if customer_has_responded and not is_first_contact:
+                print(f"   💬 Customer has responded - this is an ongoing conversation, allowing message to be sent")
+            
+            # Handle media sending logic
+            # NEW FEATURE: On first contact, store media to send after customer responds
+            # On subsequent messages (follow-ups, AI responses), send media immediately
+            # For both test messages and real customers: store media and send text only initially
             if media_path and os.path.exists(media_path):
-                media_result = self._send_media(media_path, message)
-                if media_result:
-                    # Media sent successfully
-                    print(f"✅ Message with media sent to {phone}")
-                    self.messages_sent += 1
+                # If this is the first contact, store media to send later (after customer responds)
+                # This works for both test messages (in memory) and real customers (saved to bot_state.json)
+                if is_first_contact:
+                    # Convert to absolute path to ensure file can be found later
+                    # This is important because the bot might be restarted from a different directory
+                    media_abs_path = str(Path(media_path).absolute())
                     
-                    # If this is the first contact, add offer message to conversation history
-                    # (History was already cleared in start_monitoring_contact above)
-                    if is_first_contact:
-                        # Add our offer message (caption if media, or full message) as assistant message
-                        self.conversations[phone].append({
-                            "role": "assistant",
-                            "content": message if message else f"[Media: {Path(media_path).name}]"
-                        })
-                        print(f"   Added offer message to conversation history for {phone}")
-                        
-                        # Automatically start background monitoring if not already running
-                        if not self.auto_monitoring_active:
-                            self.start_auto_monitoring()
+                    # Store main media absolute path for later sending (in memory for all contacts)
+                    self.pending_media[phone] = media_abs_path
+                    self.media_sent_after_response[phone] = False
+                    if test_message:
+                        print(f"   📎 Main media stored for {phone} (in memory) - will be sent after customer responds")
+                    else:
+                        print(f"   📎 Main media stored for {phone} - will be sent after customer responds")
+                    print(f"   📁 Main media path: {media_abs_path}")
+                    
+                    # Store second media (free product) if provided
+                    if media_path_2 and os.path.exists(media_path_2):
+                        media_2_abs_path = str(Path(media_path_2).absolute())
+                        self.pending_media_2[phone] = media_2_abs_path
+                        self.media_2_sent_after_response[phone] = False
+                        if test_message:
+                            print(f"   📎 Second media (free product) stored for {phone} (in memory) - will be sent immediately after main media")
                         else:
-                            print(f"   ✅ Auto-monitoring is already active for this contact")
-                    # If already in monitoring, this is an AI response - don't modify history
-                    # (History is already managed in generate_ai_response)
+                            print(f"   📎 Second media (free product) stored for {phone} - will be sent immediately after main media")
+                        print(f"   📁 Second media path: {media_2_abs_path}")
                     
-                    return True
+                    # Save state to persist pending media (only for real customers, skip for test messages)
+                    if not test_message:
+                        try:
+                            self._save_state()
+                        except Exception as save_err:
+                            print(f"⚠️  Failed to save state after storing pending media: {save_err}")
+                    else:
+                        print("   ℹ️  Test message: Media stored in memory (will be sent after response), bot_state.json skipped")
+                    # Continue to send text message only (no media)
+                    # Fall through to text-only sending below
                 else:
-                    # Media send had issues, but might have still sent
-                    # Check if we should fall back to text
-                    print("⚠️  Media verification uncertain - message may have been sent")
-                    print("💡 Skipping text fallback to avoid duplicate messages")
-                    # Mark as sent anyway - user can check WhatsApp
-                    self.messages_sent += 1
-                    
-                    # If this is the first contact, add offer message to conversation history
-                    # (History was already cleared in start_monitoring_contact above)
-                    if is_first_contact:
-                        # Add our offer message as assistant message
+                    # Not first contact - send media immediately (follow-up or AI response)
+                    print(f"📤 Sending media with caption (caption length: {len(message) if message else 0})...")
+                    if message:
+                        print(f"   Caption preview: {message[:100]}...")
+                    else:
+                        print(f"   ⚠️  WARNING: No message provided! Media will be sent without caption!")
+                    print(f"   🔍 About to call _send_media with message='{message[:50] if message else 'EMPTY'}...'")
+                    media_result = self._send_media(media_path, message if message else "")
+                    if media_result:
+                        # Media sent successfully
+                        print(f"✅ Message with media sent to {phone}")
+                        self.messages_sent += 1
+                        
+                        # Add to conversation history (for follow-up or AI response)
+                        if phone not in self.conversations:
+                            self.conversations[phone] = []
                         self.conversations[phone].append({
                             "role": "assistant",
                             "content": message if message else f"[Media: {Path(media_path).name}]"
                         })
-                        print(f"   Added offer message to conversation history for {phone}")
                         
-                        # Automatically start background monitoring if not already running
-                        if not self.auto_monitoring_active:
-                            self.start_auto_monitoring()
-                        else:
-                            print(f"   ✅ Auto-monitoring is already active for this contact")
-                    # If already in monitoring, this is an AI response - don't modify history
-                    
-                    return True
-            else:
-                # No media - send text only
-                if not self._send_text(message):
-                    self.messages_failed += 1
-                    return False
+                        return True
+                    else:
+                        # Media send had issues, but might have still sent
+                        print("⚠️  Media verification uncertain - message may have been sent")
+                        print("💡 Skipping text fallback to avoid duplicate messages")
+                        # Mark as sent anyway - user can check WhatsApp
+                        self.messages_sent += 1
+                        
+                        # Add to conversation history
+                        if phone not in self.conversations:
+                            self.conversations[phone] = []
+                        self.conversations[phone].append({
+                            "role": "assistant",
+                            "content": message if message else f"[Media: {Path(media_path).name}]"
+                        })
+                        
+                        return True
+            
+            # Send text message (either no media, or media stored for later on first contact)
+            if not self._send_text(message):
+                self.messages_failed += 1
+                return False
 
             # Verify sent
             time.sleep(2)
@@ -645,21 +1030,119 @@ Keep responses concise and helpful."""
 
             self.messages_sent += 1
 
-            # If this is the first contact, add offer message to conversation history
-            # (History was already cleared in start_monitoring_contact above)
+            # Handle state operations (in memory for test messages, save to bot_state.json for real customers)
+            # For test messages, still track conversation history and monitor (in memory), but skip bot_state.json
             if is_first_contact:
-                # Add our offer message as assistant message (from bot)
+                # Add our offer message to conversation history (in memory - for both test and real messages)
+                if phone not in self.conversations:
+                    self.conversations[phone] = []
                 self.conversations[phone].append({
                     "role": "assistant",
                     "content": message
                 })
                 print(f"   Added offer message to conversation history for {phone}")
                 
-                # Automatically start background monitoring if not already running
+                # Track contact time for follow-up (only set if not already set - in memory)
+                if phone not in self.last_contact_time:
+                    self.last_contact_time[phone] = datetime.now()
+                    self.customer_responded[phone] = False
+                    self.followup_sent[phone] = False
+                
+                # CRITICAL: After sending our initial message, verify baseline is correct
+                # IMPORTANT: Only mark messages that were in the ORIGINAL baseline
+                # Do NOT mark new messages that appeared after we sent (customer responses)
+                print(f"   📋 Verifying baseline after sending initial message...")
+                try:
+                    # Wait a moment for our message to appear in the chat
+                    time.sleep(1.5)
+                    
+                    # Get the original baseline sets (captured before sending)
+                    original_baseline_ids = self._baseline_message_ids.get(phone, set()) if hasattr(self, '_baseline_message_ids') else set()
+                    original_baseline_texts = self._baseline_message_texts.get(phone, set()) if hasattr(self, '_baseline_message_texts') else set()
+                    
+                    # Get all current messages (includes our message and any old messages, potentially customer response)
+                    current_messages = self._get_all_current_messages_without_open(phone)
+                    current_count = len(current_messages) if current_messages else 0
+                    
+                    # Mark ONLY messages that were in the original baseline
+                    # Do NOT mark new messages (customer responses) that appeared after we sent
+                    newly_marked = 0
+                    skipped_new = 0
+                    if current_messages:
+                        for msg in current_messages:
+                            msg_id = msg.get('id', '')
+                            msg_text = msg.get('text', '').strip()
+                            
+                            if not msg_text:
+                                continue
+                            
+                            msg_text_fingerprint = msg_text[:100] if len(msg_text) > 100 else msg_text
+                            
+                            # Check if this message was in the ORIGINAL baseline
+                            was_in_baseline = False
+                            if msg_id and msg_id in original_baseline_ids:
+                                was_in_baseline = True
+                            elif msg_text_fingerprint in original_baseline_texts:
+                                was_in_baseline = True
+                            
+                            # Only mark if it was in the original baseline
+                            if was_in_baseline:
+                                # Check if already marked
+                                msg_id_seen = msg_id and msg_id in self.seen_message_ids.get(phone, set())
+                                msg_text_seen = msg_text_fingerprint in self.seen_message_texts.get(phone, set())
+                                
+                                # If not marked, mark it now (safety check for baseline messages)
+                                if not msg_id_seen or not msg_text_seen:
+                                    if msg_id:
+                                        self.seen_message_ids[phone].add(msg_id)
+                                    self.seen_message_texts[phone].add(msg_text_fingerprint)
+                                    newly_marked += 1
+                            else:
+                                # This message was NOT in the original baseline - it's a NEW message!
+                                # Do NOT mark it as seen - it's a customer response
+                                skipped_new += 1
+                                print(f"      ⚠️  Found NEW message (not in baseline): '{msg_text[:50]}...' - will be detected as new!")
+                    
+                    if newly_marked > 0:
+                        print(f"   ✅ Marked {newly_marked} additional baseline message(s) as seen (safety check)")
+                    
+                    if skipped_new > 0:
+                        print(f"   ✅ Found {skipped_new} NEW message(s) (customer response(s)) - will be processed as new!")
+                    
+                    print(f"   🔍 Baseline verified: {len(self.seen_message_ids.get(phone, set()))} message IDs, {len(self.seen_message_texts.get(phone, set()))} text fingerprints")
+                    print(f"   💡 Customer responses sent AFTER our initial message will be detected as NEW")
+                except Exception as e:
+                    print(f"   ⚠️  Could not verify baseline: {e}")
+                    import traceback
+                    traceback.print_exc()
+                
+                # Automatically start background monitoring if not already running (for both test and real messages)
+                # This enables AI auto-responses for test messages too
                 if not self.auto_monitoring_active:
                     self.start_auto_monitoring()
+                    print(f"   ✅ Auto-monitoring started - AI will respond to messages from {phone}")
                 else:
-                    print(f"   ✅ Auto-monitoring is already active for this contact")
+                    print(f"   ✅ Auto-monitoring is already active - AI will respond to messages from {phone}")
+                
+                # Save state to bot_state.json ONLY for real customers (skip for test messages)
+                if not test_message:
+                    try:
+                        self._save_state()
+                    except Exception as save_err:
+                        print(f"⚠️  Failed to save state after sending to {phone}: {save_err}")
+                        import traceback
+                        traceback.print_exc()
+                else:
+                    print("   ℹ️  Test message: Conversation history and monitoring active (in memory), bot_state.json skipped")
+            else:
+                # This is a follow-up or AI response - add to conversation history
+                # Initialize conversation history if it doesn't exist
+                if phone not in self.conversations:
+                    self.conversations[phone] = []
+                self.conversations[phone].append({
+                    "role": "assistant",
+                    "content": message
+                })
             # If already in monitoring, this is an AI response - don't modify history
             # (History is already managed in generate_ai_response)
 
@@ -667,6 +1150,8 @@ Keep responses concise and helpful."""
 
         except Exception as e:
             print(f"❌ Error sending to {phone}: {e}")
+            import traceback
+            traceback.print_exc()  # Print full traceback for debugging
             self.messages_failed += 1
             return False
 
@@ -732,6 +1217,11 @@ Keep responses concise and helpful."""
         """Send media (image/video) with optional caption using drag-and-drop for video preview"""
         try:
             print(f"📎 Attaching media: {Path(media_path).name}")
+            print(f"🔍 _send_media called with caption length: {len(caption) if caption else 0}")
+            if caption:
+                print(f"   Caption preview: {caption[:100]}...")
+            else:
+                print(f"   ⚠️  No caption provided to _send_media")
 
             # CRITICAL: Ensure window is visible and focused
             # File uploads don't work reliably when window is minimized/background
@@ -764,35 +1254,66 @@ Keep responses concise and helpful."""
             else:
                 print(f"🖼️ Sending image")
 
-            # STEP 1: Add caption FIRST (before attaching media)
-            # When media is attached, WhatsApp will use this text as the caption
+            # STEP 1: Type caption text FIRST (before attaching media)
+            # WhatsApp Web will use this text as the caption when media is attached
             if caption:
-                print(f"📝 Typing caption first (will become media caption)...")
+                print(f"📝 Typing caption text first (will become media caption)...")
                 try:
                     import pyperclip
                     import platform
-
-                    input_box = self.wait.until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, "[contenteditable='true'][data-tab='10']"))
-                    )
-
-                    # Focus input box
-                    input_box.click()
-                    time.sleep(0.3)
-
+                    
+                    # Ensure the input area is focused and visible
+                    print("🔍 Focusing chat input box...")
+                    try:
+                        # Scroll to bottom to ensure input area is visible
+                        self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                        time.sleep(0.5)
+                        
+                        # Find and focus the input box
+                        input_box = self.wait.until(
+                            EC.element_to_be_clickable((By.CSS_SELECTOR, "div[contenteditable='true'][data-tab='10']"))
+                        )
+                        # Scroll input into view
+                        self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", input_box)
+                        time.sleep(0.3)
+                        # Click to focus
+                        input_box.click()
+                        time.sleep(0.5)
+                        print("✅ Chat input box focused")
+                    except Exception as e:
+                        print(f"   ⚠️  Could not focus input: {e}")
+                        raise
+                    
+                    # Clear any existing text first
+                    try:
+                        input_box.clear()
+                        # Also use JavaScript to clear
+                        self.driver.execute_script("arguments[0].textContent = '';", input_box)
+                        self.driver.execute_script("arguments[0].innerText = '';", input_box)
+                        time.sleep(0.3)
+                    except Exception as e:
+                        print(f"   ℹ️  Could not clear input (might be empty already): {e}")
+                    
+                    # Focus the input again to ensure it's ready
+                    try:
+                        input_box.click()
+                        time.sleep(0.3)
+                    except:
+                        pass
+                    
                     # Use system clipboard to preserve line breaks
                     pyperclip.copy(caption)
                     print(f"📋 Caption copied to clipboard ({len(caption)} chars, {caption.count(chr(10))} line breaks)")
-
+                    
                     # Paste with Ctrl+V or Cmd+V
                     if platform.system() == 'Darwin':  # macOS
                         input_box.send_keys(Keys.COMMAND, 'v')
                     else:  # Windows/Linux
                         input_box.send_keys(Keys.CONTROL, 'v')
-
+                    
+                    time.sleep(1)  # Wait for paste to complete
                     print(f"✅ Caption pasted in chat input: {caption[:50]}...")
-                    time.sleep(1)
-
+                    
                     # Verify caption was pasted
                     caption_check = self.driver.execute_script(
                         """
@@ -802,63 +1323,243 @@ Keep responses concise and helpful."""
                         input_box
                     )
                     print(f"✓ Caption in input box: {len(caption_check)} chars")
-
+                    if len(caption_check) < len(caption) * 0.5:  # If less than 50% of caption was pasted
+                        print(f"⚠️  Caption might not have been pasted correctly (expected {len(caption)} chars, got {len(caption_check)} chars)")
+                    else:
+                        print(f"✅ Caption text is ready in input box - will become media caption when media is attached")
+                    
                 except Exception as e:
-                    print(f"⚠️  Could not paste caption: {e}")
+                    print(f"⚠️  Could not type caption text: {e}")
                     import traceback
                     traceback.print_exc()
+                    print(f"   💡 Will try to attach media anyway (without caption)")
+            else:
+                print(f"ℹ️  No caption provided - media will be sent without caption")
 
-            # STEP 2: Click attachment button - try multiple selectors
+            # STEP 2: NOW attach media (the text in input box will automatically become the caption)
             print("📎 Opening attachment menu...")
+            
+            # Ensure the input area is still focused
+            try:
+                # Scroll to bottom to ensure input area is visible
+                self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                time.sleep(0.3)
+            except:
+                pass
 
+            # Wait a bit for UI to settle
+            time.sleep(0.5)
+
+            # Comprehensive list of attachment button selectors (WhatsApp Web uses different ones)
             attach_selectors = [
-                "[data-icon='plus']",  # Plus icon (new WhatsApp UI)
-                "[data-icon='clip']",  # Clip icon
-                "[aria-label='Attach']",  # Aria label
-                "span[data-icon='plus']",
-                "span[data-icon='clip']",
+                # New WhatsApp Web UI
                 "button[aria-label='Attach']",
+                "span[data-icon='attach']",
+                "span[data-icon='clip']",
+                "[data-icon='attach']",
+                "[data-icon='clip']",
+                "[data-icon='plus']",
+                # Alternative selectors
+                "div[role='button'][aria-label*='Attach']",
+                "div[role='button'][title*='Attach']",
+                "button[title*='Attach']",
+                "span[title*='Attach']",
+                # Find by proximity to input box
+                "div[contenteditable='true'][data-tab='10'] ~ div span[data-icon]",
+                "div[contenteditable='true'][data-tab='10'] + div button",
             ]
 
             attach_btn = None
+            clicked = False
+            
+            # Method 1: Try Selenium find_element with explicit wait
             for selector in attach_selectors:
                 try:
-                    attach_btn = self.driver.find_element(By.CSS_SELECTOR, selector)
-                    if attach_btn and attach_btn.is_displayed():
+                    # Try with explicit wait
+                    attach_btn = WebDriverWait(self.driver, 3).until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+                    )
+                    if attach_btn:
+                        # Scroll element into view
+                        self.driver.execute_script("arguments[0].scrollIntoView(true);", attach_btn)
+                        time.sleep(0.3)
                         attach_btn.click()
                         print(f"✅ Opened attachment menu (selector: {selector})")
+                        clicked = True
                         break
                 except:
                     continue
 
-            if not attach_btn:
-                # Try JavaScript fallback
+            # Method 2: JavaScript fallback with more comprehensive search
+            if not clicked:
+                print("   🔄 Trying JavaScript method to find attachment button...")
                 clicked = self.driver.execute_script("""
-                    const selectors = [
-                        '[data-icon="plus"]',
-                        '[data-icon="clip"]',
-                        '[aria-label*="Attach"]',
-                        'button[aria-label*="Attach"]'
-                    ];
-                    for (const sel of selectors) {
-                        const btn = document.querySelector(sel);
-                        if (btn) {
-                            btn.click();
-                            return true;
+                    // Find input box first
+                    const inputBox = document.querySelector('div[contenteditable="true"][data-tab="10"]');
+                    if (!inputBox) {
+                        console.log('Input box not found');
+                        return false;
+                    }
+                    
+                    // Find attachment button - multiple strategies
+                    let attachBtn = null;
+                    
+                    // Strategy 1: Find button with aria-label containing "Attach"
+                    attachBtn = document.querySelector('button[aria-label*="Attach" i]') ||
+                                document.querySelector('div[role="button"][aria-label*="Attach" i]') ||
+                                document.querySelector('[aria-label*="Attach" i]');
+                    
+                    // Strategy 2: Find by data-icon
+                    if (!attachBtn) {
+                        const icons = ['attach', 'clip', 'plus'];
+                        for (const icon of icons) {
+                            attachBtn = document.querySelector(`[data-icon="${icon}"]`) ||
+                                       document.querySelector(`span[data-icon="${icon}"]`);
+                            if (attachBtn) break;
                         }
                     }
+                    
+                    // Strategy 3: Find button near input box (parent or sibling)
+                    if (!attachBtn && inputBox) {
+                        // Look in the same container as input box
+                        const container = inputBox.closest('div[role="textbox"]') || 
+                                        inputBox.closest('div[data-testid]') ||
+                                        inputBox.parentElement?.parentElement;
+                        if (container) {
+                            attachBtn = container.querySelector('button[aria-label*="Attach" i]') ||
+                                       container.querySelector('[data-icon="attach"]') ||
+                                       container.querySelector('[data-icon="clip"]') ||
+                                       container.querySelector('[data-icon="plus"]');
+                        }
+                    }
+                    
+                    // Strategy 4: Find all buttons and look for attachment-related ones
+                    if (!attachBtn) {
+                        const allButtons = document.querySelectorAll('button, div[role="button"]');
+                        for (const btn of allButtons) {
+                            const ariaLabel = btn.getAttribute('aria-label') || '';
+                            const title = btn.getAttribute('title') || '';
+                            if (ariaLabel.toLowerCase().includes('attach') || 
+                                title.toLowerCase().includes('attach') ||
+                                btn.querySelector('[data-icon="attach"]') ||
+                                btn.querySelector('[data-icon="clip"]')) {
+                                attachBtn = btn;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    if (attachBtn) {
+                        console.log('Found attachment button:', attachBtn);
+                        // Scroll into view
+                        attachBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        // Try clicking
+                        attachBtn.click();
+                        return true;
+                    }
+                    
+                    console.log('Attachment button not found');
                     return false;
                 """)
 
                 if clicked:
                     print("✅ Opened attachment menu (via JavaScript)")
+                    time.sleep(1)  # Wait for menu to open
                 else:
-                    raise Exception("Could not find attachment button")
+                    # Last resort: Try to find by searching the entire page
+                    print("   🔄 Trying comprehensive page search...")
+                    try:
+                        # Get all clickable elements near the input area
+                        all_elements = self.driver.find_elements(By.CSS_SELECTOR, 
+                            "div[contenteditable='true'][data-tab='10'] ~ * button, " +
+                            "div[contenteditable='true'][data-tab='10'] ~ * [role='button'], " +
+                            "div[contenteditable='true'][data-tab='10'] ~ * span[data-icon]"
+                        )
+                        
+                        for elem in all_elements[:10]:  # Check first 10 elements
+                            try:
+                                aria_label = elem.get_attribute('aria-label') or ''
+                                if 'attach' in aria_label.lower() or 'clip' in aria_label.lower():
+                                    self.driver.execute_script("arguments[0].scrollIntoView(true);", elem)
+                                    time.sleep(0.3)
+                                    elem.click()
+                                    print(f"✅ Found attachment button by aria-label: {aria_label}")
+                                    clicked = True
+                                    break
+                            except:
+                                continue
+                                
+                        if not clicked:
+                            # Debug: Print what buttons we found
+                            print("   🔍 Debug: Searching for attachment button...")
+                            debug_info = self.driver.execute_script("""
+                                const inputBox = document.querySelector('div[contenteditable="true"][data-tab="10"]');
+                                const container = inputBox ? inputBox.closest('div[data-testid]') || inputBox.parentElement : null;
+                                const buttons = container ? container.querySelectorAll('button, div[role="button"], span[data-icon]') : [];
+                                return Array.from(buttons).slice(0, 10).map(btn => ({
+                                    tag: btn.tagName,
+                                    ariaLabel: btn.getAttribute('aria-label'),
+                                    title: btn.getAttribute('title'),
+                                    dataIcon: btn.getAttribute('data-icon'),
+                                    className: btn.className,
+                                    visible: btn.offsetParent !== null
+                                }));
+                            """)
+                            if debug_info:
+                                print(f"   📋 Found {len(debug_info)} potential buttons near input:")
+                                for i, info in enumerate(debug_info[:5]):
+                                    print(f"      {i+1}. {info.get('tag')} - aria-label: {info.get('ariaLabel')}, data-icon: {info.get('dataIcon')}, visible: {info.get('visible')}")
+                            
+                            # Don't raise exception yet - try alternative methods first
+                            print("   ⚠️  Attachment button not found - will try alternative methods")
+                    except Exception as e:
+                        print(f"   ⚠️  Comprehensive search had issues: {e}")
+                        print("   💡 Will try to continue with file input directly...")
+            
+            # If attachment button wasn't clicked, try alternative methods
+            if not clicked:
+                print("   🔄 Trying alternative methods to access file upload...")
+                
+                # Method 1: Check if file input already exists (sometimes WhatsApp has it available)
+                file_inputs = self.driver.find_elements(By.CSS_SELECTOR, "input[type='file']")
+                if file_inputs:
+                    print(f"   ✅ Found {len(file_inputs)} file input(s) - will use directly")
+                    # Skip the attachment button click and go straight to file input
+                    # We'll handle this in the file input section below
+                else:
+                    # Method 2: Try keyboard shortcut (Ctrl+O or Cmd+O to open file)
+                    print("   🔄 Trying keyboard shortcut to open file dialog...")
+                    try:
+                        input_box = self.driver.find_element(By.CSS_SELECTOR, "div[contenteditable='true'][data-tab='10']")
+                        input_box.click()
+                        time.sleep(0.3)
+                        # Try Cmd+O (Mac) or Ctrl+O (Windows/Linux)
+                        import platform
+                        if platform.system() == 'Darwin':  # macOS
+                            input_box.send_keys(Keys.COMMAND + 'o')
+                        else:
+                            input_box.send_keys(Keys.CONTROL + 'o')
+                        time.sleep(1)
+                        print("   ✅ Sent keyboard shortcut - checking for file input...")
+                        file_inputs = self.driver.find_elements(By.CSS_SELECTOR, "input[type='file']")
+                        if file_inputs:
+                            print(f"   ✅ File input appeared after keyboard shortcut!")
+                            clicked = True  # Mark as successful
+                    except Exception as kb_err:
+                        print(f"   ⚠️  Keyboard shortcut failed: {kb_err}")
+                
+                # Method 3: Try right-click context menu (if file input still not found)
+                if not file_inputs and not clicked:
+                    print("   🔄 File input still not found - you may need to manually attach file")
+                    print("   💡 The bot will continue but media attachment may fail")
+                    # Don't raise exception - let it try to continue and fail gracefully later
 
-            time.sleep(1.5)
+            # Only wait if we successfully clicked attachment button
+            if clicked:
+                time.sleep(1.5)
 
-            # Now find and click "Photos & Videos" for video preview
-            if is_video:
+            # Now find and click "Photos & Videos" for video preview (only if attachment menu opened)
+            if is_video and clicked:
                 print("🎥 Selecting 'Photos & Videos' option...")
 
                 # Give menu time to fully render
@@ -1065,18 +1766,18 @@ Keep responses concise and helpful."""
                 except Exception as e:
                     raise Exception(f"Could not find file input element: {str(e)}")
 
-            # STEP 3: Send file path to input
-            # This will close Finder and upload the file with the caption we typed earlier
+            # STEP 3: Send file path to input (the text already in input box will become the caption)
             print(f"📤 Sending file to WhatsApp...")
+            print(f"   💡 Note: Text already in input box will automatically become the media caption")
             try:
                 file_input.send_keys(abs_path)
                 print(f"✅ File path sent to input")
 
-                # Wait for Finder to close and upload to start
-                print("⏳ Waiting for Finder to close and upload to begin...")
-                time.sleep(3)
+                # Wait for Finder to close and media preview to appear
+                print("⏳ Waiting for Finder to close and media preview to appear...")
+                time.sleep(2)
 
-                # Verify upload started by checking if preview appeared
+                # Verify preview appeared
                 max_attempts = 5
                 preview_found = False
                 for attempt in range(max_attempts):
@@ -1090,27 +1791,44 @@ Keep responses concise and helpful."""
                     """)
 
                     if preview_exists:
-                        print(f"✅ Upload started, preview visible")
+                        print(f"✅ Media preview appeared (caption text should be preserved)")
                         preview_found = True
                         break
                     else:
                         if attempt < max_attempts - 1:
                             print(f"   Waiting for preview... (attempt {attempt + 1}/{max_attempts})")
-                            time.sleep(2)
+                            time.sleep(1)
 
                 if not preview_found:
-                    print(f"⚠️  Could not verify upload preview, but continuing...")
+                    print(f"⚠️  Could not verify media preview, but continuing...")
+
+                # Verify caption is still there (it should be - WhatsApp preserves text in input when attaching media)
+                if caption:
+                    try:
+                        caption_input = self.driver.find_element(By.CSS_SELECTOR, "div[contenteditable='true'][data-tab='10']")
+                        caption_check = self.driver.execute_script(
+                            """
+                            const el = arguments[0];
+                            return el.textContent || el.innerText || '';
+                            """,
+                            caption_input
+                        )
+                        if len(caption_check) > 0:
+                            print(f"✅ Caption text preserved in media preview ({len(caption_check)} chars)")
+                        else:
+                            print(f"⚠️  Caption text might have been cleared - media will be sent without caption")
+                    except:
+                        print(f"   ℹ️  Could not verify caption text (media should still send)")
 
             except Exception as e:
                 print(f"⚠️  Error sending file path: {e}")
                 raise
-
-            # STEP 4: Wait for upload to complete
-            # Caption should already be there from Step 1
+            
+            # STEP 5: Wait for upload to complete
             print("⏳ Waiting for video to finish uploading...")
             time.sleep(4)
 
-            # STEP 5: Click send button - try multiple methods
+            # STEP 6: Click send button - try multiple methods
             print("📤 Looking for send button...")
 
             send_success = False
@@ -1257,19 +1975,143 @@ Keep responses concise and helpful."""
             traceback.print_exc()
             return False
 
-    def get_new_messages(self, phone: str) -> Optional[str]:
+    def _get_all_current_messages_without_open(self, phone: str) -> List[dict]:
+        """
+        Get all current messages from a contact (without filtering for new ones)
+        This is used to establish a baseline before sending our initial message
+        Assumes we're already in the chat (doesn't open chat)
+        
+        Args:
+            phone: Phone number to check
+            
+        Returns:
+            List of message dictionaries with 'id', 'text', and 'timestamp' keys
+        """
+        try:
+            phone = self._format_phone(phone)
+            
+            # We're already in the chat, just wait for it to stabilize
+            time.sleep(1)  # Brief wait for chat to stabilize
+            
+            # Scroll to ensure all messages are loaded
+            try:
+                self.driver.execute_script("""
+                    const msgContainer = document.querySelector('[data-testid="conversation-panel-body"]') ||
+                                        document.querySelector('[data-testid="conversation-panel-messages"]');
+                    if (msgContainer) {
+                        msgContainer.scrollTop = msgContainer.scrollHeight;
+                    }
+                """)
+                time.sleep(1.0)  # Wait for messages to render after scroll
+            except:
+                pass
+            
+            time.sleep(1.5)  # Wait for messages to render
+            
+            # Use JavaScript to find all incoming messages
+            result = self.driver.execute_script(r"""
+                // Try multiple selectors for message containers
+                let messageContainers = document.querySelectorAll('[data-testid="msg-container"]');
+                
+                // Fallback: try alternative selectors
+                if (messageContainers.length === 0) {
+                    messageContainers = document.querySelectorAll('div[data-id]');
+                }
+                
+                // Filter for incoming messages (not sent by us)
+                const incomingMessages = [];
+                
+                for (const container of messageContainers) {
+                    // Check if this is an incoming message (has 'message-in' class)
+                    const msgDiv = container.querySelector('[class*="message-in"]');
+                    
+                    if (msgDiv) {
+                        // Get the text content - try multiple selectors
+                        let text = null;
+                        
+                        // Try .selectable-text first
+                        const selectableText = container.querySelector('.selectable-text');
+                        if (selectableText) {
+                            text = selectableText.textContent || selectableText.innerText;
+                        }
+                        
+                        // Try conversation-text as fallback
+                        if (!text) {
+                            const convText = container.querySelector('[data-testid="conversation-text"]');
+                            if (convText) {
+                                text = convText.textContent || convText.innerText;
+                            }
+                        }
+                        
+                        // Try any span with text as last resort
+                        if (!text) {
+                            const spans = container.querySelectorAll('span');
+                            for (const span of spans) {
+                                const spanText = span.textContent || span.innerText;
+                                if (spanText && spanText.trim() && spanText.length > 0) {
+                                    text = spanText;
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        if (text && text.trim()) {
+                            // Get timestamp if available
+                            let timestamp = null;
+                            const timeEl = container.querySelector('[data-testid="msg-meta"]') ||
+                                          container.querySelector('span[class*="timestamp"]') ||
+                                          container.querySelector('div[data-pre-plain-text]');
+                            if (timeEl) {
+                                timestamp = timeEl.textContent || timeEl.getAttribute('data-pre-plain-text');
+                            }
+                            
+                            // Create unique ID from message content + timestamp
+                            const msgId = container.getAttribute('data-id') ||
+                                         (text.substring(0, 50) + (timestamp || '')).replace(/\s/g, '');
+                            
+                            incomingMessages.push({
+                                text: text.trim(),
+                                timestamp: timestamp,
+                                id: msgId
+                            });
+                        }
+                    }
+                }
+                
+                // Return all incoming messages
+                return {
+                    messages: incomingMessages,
+                    count: incomingMessages.length
+                };
+            """)
+            
+            if result:
+                messages = result.get('messages', [])
+                return messages
+            
+            return []
+            
+        except Exception as e:
+            print(f"⚠️  Error getting all current messages for {phone}: {e}")
+            return []
+
+    def get_new_messages(self, phone: str, skip_chat_open: bool = False) -> Optional[str]:
         """
         Check for new messages from a contact
 
         Args:
             phone: Phone number to check
+            skip_chat_open: If True, skip opening the chat (assumes we're already in it)
 
         Returns:
             New message text if found, None otherwise
         """
         try:
             phone = self._format_phone(phone)
-            print(f"🔍 Checking messages from {phone}...")
+            # Reduced logging for batch operations (only log if verbose mode)
+            verbose = getattr(self, 'verbose_monitoring', False)
+            if verbose:
+                print(f"🔍 Checking messages from {phone}...")
 
             # Ensure window is visible (message detection can fail when minimized)
             try:
@@ -1278,10 +2120,15 @@ Keep responses concise and helpful."""
             except:
                 pass  # Not critical for message checking
 
-            # Open chat
-            url = f"https://web.whatsapp.com/send?phone={phone.replace('+', '')}"
-            self.driver.get(url)
-            time.sleep(5)  # Increased wait time for chat to load
+            # Open chat safely (with lock to prevent race conditions)
+            if not skip_chat_open:
+                if not self._open_chat_safely(phone):
+                    if verbose:
+                        print(f"⚠️  Could not open chat for {phone}")
+                    return None
+                # Reduced wait time for faster checking (was 2s, now 1.2s)
+                time.sleep(1.2)  # Wait for chat to stabilize
+            # If skip_chat_open is True, we assume we're already in the correct chat
 
             # Check if chat loaded successfully - try multiple selectors
             chat_loaded = False
@@ -1292,22 +2139,20 @@ Keep responses concise and helpful."""
                 "[contenteditable='true'][data-tab='10']",  # Message input box
             ]
 
-            print("⏳ Waiting for chat to load...")
+            # Reduced wait time for element detection (was 5s, now 3s)
             for selector in chat_selectors:
                 try:
-                    element = WebDriverWait(self.driver, 5).until(
+                    element = WebDriverWait(self.driver, 3).until(
                         EC.presence_of_element_located((By.CSS_SELECTOR, selector))
                     )
                     if element:
-                        print(f"✅ Chat loaded (found: {selector})")
                         chat_loaded = True
                         break
                 except TimeoutException:
                     continue
 
             if not chat_loaded:
-                # Last resort: check with JavaScript
-                print("🔄 Trying JavaScript check...")
+                # Last resort: check with JavaScript (faster than WebDriverWait)
                 chat_loaded = self.driver.execute_script("""
                     // Check if we're in a chat conversation
                     const hasMessages = document.querySelector('[data-testid="msg-container"]') !== null;
@@ -1317,12 +2162,12 @@ Keep responses concise and helpful."""
                 """)
 
             if not chat_loaded:
-                print(f"⚠️  Could not load chat for {phone} - chat interface not detected")
-                print("💡 Tip: Make sure the chat exists and WhatsApp Web is properly loaded")
+                if verbose:
+                    print(f"⚠️  Could not load chat for {phone} - chat interface not detected")
                 return None
 
             # Scroll to ensure all recent messages are loaded
-            print("📜 Scrolling to load recent messages...")
+            # Reduced logging for faster operation in batch mode
             try:
                 self.driver.execute_script("""
                     // Find the message container and scroll to bottom
@@ -1330,18 +2175,16 @@ Keep responses concise and helpful."""
                                         document.querySelector('[data-testid="conversation-panel-messages"]');
                     if (msgContainer) {
                         msgContainer.scrollTop = msgContainer.scrollHeight;
-                        console.log('Scrolled to bottom of messages');
-                    } else {
-                        console.log('Could not find message container to scroll');
                     }
                 """)
-                time.sleep(2)  # Increased: Wait for messages to render after scroll
+                # Reduced wait time for faster checking (was 2s, now 1s)
+                time.sleep(1.0)  # Wait for messages to render after scroll
             except Exception as scroll_err:
-                print(f"⚠️  Could not scroll: {scroll_err}")
+                # Silently continue - scrolling is not critical
+                pass
 
-            # Give EXTRA time for messages to fully render (critical for minimized window)
-            print("⏳ Waiting for messages to render...")
-            time.sleep(2.5)  # Increased from 1.5s
+            # Reduced wait time for message rendering (was 2.5s, now 1.5s)
+            time.sleep(1.5)  # Wait for messages to render
 
             # Try multiple strategies to find incoming messages
             last_msg = None
@@ -1436,50 +2279,178 @@ Keep responses concise and helpful."""
             if result:
                 messages = result.get('messages', [])
                 msg_count = result.get('count', 0)
-                print(f"📨 JavaScript found {msg_count} incoming messages in chat with {phone}")
-                if msg_count == 0:
+                verbose = getattr(self, 'verbose_monitoring', False)
+                if verbose:
+                    print(f"📨 JavaScript found {msg_count} incoming messages in chat with {phone}")
+                if msg_count == 0 and verbose:
                     print("⚠️  JavaScript found 0 messages - will try fallback method")
 
-                # Get seen message IDs for this phone
+                # Get seen message IDs and texts for this phone
                 if not hasattr(self, 'seen_message_ids'):
                     self.seen_message_ids = {}
                 if phone not in self.seen_message_ids:
                     self.seen_message_ids[phone] = set()
+                
+                # Initialize seen_message_texts if needed
+                if not hasattr(self, 'seen_message_texts'):
+                    self.seen_message_texts = {}
+                if phone not in self.seen_message_texts:
+                    self.seen_message_texts[phone] = set()
 
                 # Find NEW messages (ones we haven't seen before)
+                # CRITICAL: We need to check if a message was in the ORIGINAL baseline
+                # A message is only "seen" if BOTH its ID AND text were in the baseline
+                # If only text matches but ID is different, it's a NEW message (customer sent same text again)
                 new_messages = []
+                total_messages = len(messages)
+                print(f"   🔍 Checking {total_messages} incoming messages for new ones...")
+                print(f"   📊 Baseline: {len(self.seen_message_ids.get(phone, set()))} message IDs, {len(self.seen_message_texts.get(phone, set()))} text fingerprints")
+                
+                # Get original baseline sets (captured before sending initial message)
+                # Initialize if not exists (for contacts that were added before this feature)
+                if not hasattr(self, '_baseline_message_ids'):
+                    self._baseline_message_ids = {}
+                if not hasattr(self, '_baseline_message_texts'):
+                    self._baseline_message_texts = {}
+                
+                original_baseline_ids = self._baseline_message_ids.get(phone, set())
+                original_baseline_texts = self._baseline_message_texts.get(phone, set())
+                
+                if original_baseline_ids or original_baseline_texts:
+                    print(f"   📋 Using baseline: {len(original_baseline_ids)} IDs, {len(original_baseline_texts)} text fingerprints")
+                else:
+                    print(f"   ⚠️  No baseline found for {phone} - treating all messages as potentially new")
+                
                 for msg in messages:
                     msg_id = msg.get('id', '')
-                    msg_text = msg.get('text', '')
-                    if msg_id and msg_id not in self.seen_message_ids[phone]:
+                    msg_text = msg.get('text', '').strip()
+                    
+                    # Skip empty messages
+                    if not msg_text:
+                        continue
+                    
+                    # Check if this message was in the ORIGINAL baseline
+                    msg_id_in_baseline = msg_id and msg_id in original_baseline_ids
+                    msg_text_fingerprint = msg_text[:100] if len(msg_text) > 100 else msg_text
+                    msg_text_in_baseline = msg_text_fingerprint in original_baseline_texts
+                    
+                    # Message is in baseline if BOTH ID and text were in baseline
+                    is_in_baseline = msg_id_in_baseline and msg_text_in_baseline
+                    
+                    # Check if we've already marked it as seen (for messages we've processed)
+                    msg_id_seen = msg_id and msg_id in self.seen_message_ids.get(phone, set())
+                    msg_text_seen = msg_text_fingerprint in self.seen_message_texts.get(phone, set())
+                    
+                    # CRITICAL: If message text is in baseline, we need to be more careful
+                    # If text is in baseline, it's likely an old message, even if ID is different
+                    # Only treat it as new if:
+                    # 1. It's NOT in baseline (both ID and text), AND
+                    # 2. We haven't already processed a message with this text after our initial message
+                    # 
+                    # If text is in baseline but we've already processed it, it's the same old message
+                    # (WhatsApp might be giving it different IDs on different checks)
+                    if msg_text_in_baseline:
+                        # Text is in baseline - this is likely an old message
+                        # Only treat as new if:
+                        # - ID is NOT in baseline (different ID), AND
+                        # - We haven't already processed a message with this text
+                        if msg_id_in_baseline:
+                            # Both ID and text in baseline - definitely old
+                            is_seen = True
+                        elif msg_text_seen:
+                            # Text in baseline and we've already processed it - it's the same old message
+                            # (WhatsApp might be giving it different IDs, but it's still the same message)
+                            is_seen = True
+                        else:
+                            # Text in baseline but ID is different AND we haven't processed it
+                            # This could be:
+                            # 1. Customer sent the same text again (new message) - treat as new
+                            # 2. Old message with different ID - but we can't tell, so treat as new
+                            # We'll treat it as new, but be cautious
+                            is_seen = False
+                    else:
+                        # Text is NOT in baseline - this is definitely a new message
+                        # Check if we've already processed it
+                        is_seen = msg_id_seen and msg_text_seen
+                    
+                    # Only consider it new if it's NOT seen
+                    if not is_seen:
                         new_messages.append(msg)
-                        print(f"  ✨ NEW: {msg_text[:60]}..." if len(msg_text) > 60 else f"  ✨ NEW: {msg_text}")
+                        # Log new messages (always log for debugging)
+                        print(f"  ✨ NEW message from {phone}: '{msg_text[:60]}...' (ID: {msg_id[:20] if msg_id else 'N/A'})" if len(msg_text) > 60 else f"  ✨ NEW message from {phone}: '{msg_text}' (ID: {msg_id[:20] if msg_id else 'N/A'})")
+                        if msg_id_in_baseline or msg_text_in_baseline:
+                            print(f"      ⚠️  Note: Text or ID matches baseline, but BOTH don't match - treating as NEW")
+                    else:
+                        # Log skipped messages for debugging (first few)
+                        if msg_id_in_baseline and msg_text_in_baseline:
+                            reason = "in original baseline"
+                        elif msg_id_seen and msg_text_seen:
+                            reason = "already processed"
+                        elif msg_id_in_baseline:
+                            reason = "ID in baseline"
+                        elif msg_text_in_baseline:
+                            reason = "text in baseline"
+                        else:
+                            reason = "unknown"
+                        
+                        if len(new_messages) < 3:  # Only log first few skipped for debugging
+                            print(f"  ℹ️  SKIPPED ({reason}): '{msg_text[:50]}...' (ID: {msg_id[:20] if msg_id else 'N/A'})")
+                
+                if new_messages:
+                    print(f"   ✅ Found {len(new_messages)} new message(s) out of {total_messages} total")
+                else:
+                    print(f"   ℹ️  No new messages found (all {total_messages} messages already seen)")
+                    # CRITICAL: If no new messages, return None immediately to prevent processing old messages
+                    return None
 
                 # If we found new messages, mark them as seen and return the FIRST new one
                 if new_messages:
-                    # Mark ALL new messages as seen
+                    # Mark ALL new messages as seen (both ID and text)
                     for msg in new_messages:
-                        self.seen_message_ids[phone].add(msg.get('id', ''))
-
+                        msg_id = msg.get('id', '')
+                        msg_text = msg.get('text', '').strip()
+                        
+                        # Mark by ID
+                        if msg_id:
+                            self.seen_message_ids[phone].add(msg_id)
+                        
+                        # Mark by text fingerprint (first 100 chars)
+                        if msg_text:
+                            msg_text_fingerprint = msg_text[:100] if len(msg_text) > 100 else msg_text
+                            if phone not in self.seen_message_texts:
+                                self.seen_message_texts[phone] = set()
+                            self.seen_message_texts[phone].add(msg_text_fingerprint)
+                        
                     # Keep only last 100 message IDs to avoid memory bloat
                     if len(self.seen_message_ids[phone]) > 100:
                         # Convert to list, keep last 100, convert back to set
                         self.seen_message_ids[phone] = set(list(self.seen_message_ids[phone])[-100:])
-
+                    
+                    # Keep only last 100 message text fingerprints to avoid memory bloat
+                    if phone in self.seen_message_texts and len(self.seen_message_texts[phone]) > 100:
+                        # Convert to list, keep last 100, convert back to set
+                        self.seen_message_texts[phone] = set(list(self.seen_message_texts[phone])[-100:])
+                    
                     # Return the FIRST new message (oldest unread)
-                    last_msg = new_messages[0].get('text', '')
-                    print(f"✨ Returning FIRST new message from {phone}: {last_msg[:100]}...")
-
+                    last_msg = new_messages[0].get('text', '').strip()
+                    verbose = getattr(self, 'verbose_monitoring', False)
+                    if verbose:
+                        print(f"✨ Returning FIRST new message from {phone}: {last_msg[:100]}...")
+                    
                     # Also update the old tracking for backward compatibility
                     if last_msg:
                         self.last_messages[phone] = last_msg
                 else:
-                    print(f"ℹ️  All messages already seen")
+                    verbose = getattr(self, 'verbose_monitoring', False)
+                    if verbose:
+                        print(f"ℹ️  All messages already seen")
                     all_incoming = []  # Clear to trigger fallback
 
             # Strategy 2: Fallback using Selenium if JavaScript method fails
             if not last_msg:
-                print("🔄 Trying fallback method...")
+                verbose = getattr(self, 'verbose_monitoring', False)
+                if verbose:
+                    print("🔄 Trying fallback method...")
                 # Try different selector combinations
                 selector_attempts = [
                     "[data-testid='msg-container'] [class*='message-in'] .selectable-text",
@@ -1493,22 +2464,28 @@ Keep responses concise and helpful."""
                         messages = self.driver.find_elements(By.CSS_SELECTOR, selector)
                         if messages:
                             last_msg = messages[-1].text.strip()
-                            print(f"✅ Found message with selector: {selector}")
+                            verbose = getattr(self, 'verbose_monitoring', False)
+                            if verbose:
+                                print(f"✅ Found message with selector: {selector}")
                             if last_msg:
                                 # Use text-based tracking as fallback
                                 last_seen = self.last_messages.get(phone, "")
                                 if last_msg != last_seen:
                                     self.last_messages[phone] = last_msg
-                                    print(f"✨ NEW MESSAGE from {phone}: {last_msg[:100]}...")
+                                    if verbose:
+                                        print(f"✨ NEW MESSAGE from {phone}: {last_msg[:100]}...")
                                     return last_msg
                                 else:
-                                    print(f"ℹ️  No new messages (already seen)")
+                                    if verbose:
+                                        print(f"ℹ️  No new messages (already seen)")
                                     return None
                     except Exception as sel_err:
                         continue
 
             if not last_msg:
-                print(f"ℹ️  No new messages from {phone}")
+                verbose = getattr(self, 'verbose_monitoring', False)
+                if verbose:
+                    print(f"ℹ️  No new messages from {phone}")
                 return None
 
             # If we got here, last_msg is already set from the ID-based method
@@ -1564,13 +2541,130 @@ Keep responses concise and helpful."""
 
             # Call OpenAI API with explicit timeout
             # Increased max_tokens to 800 to prevent message truncation
-            response = self.openai_client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=0.7,
-                max_tokens=800,  # Increased from 200 to allow complete responses
-                timeout=30.0  # 30 second timeout
-            )
+            try:
+                response = self.openai_client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=0.7,
+                    max_tokens=800,  # Increased from 200 to allow complete responses
+                    timeout=30.0  # 30 second timeout
+                )
+            except Exception as api_error:
+                # Check if this is an SSL/certificate error by examining the exception and its cause
+                error_str = str(api_error).lower()
+                error_type = type(api_error).__name__
+                
+                # Check the underlying cause (wrapped exceptions) - OpenAI wraps SSL errors
+                underlying_error = getattr(api_error, '__cause__', None) or getattr(api_error, '__context__', None)
+                underlying_str = str(underlying_error).lower() if underlying_error else ""
+                underlying_type = type(underlying_error).__name__ if underlying_error else ""
+                
+                # Check if it's an SSL/certificate error - multiple detection methods
+                # APIConnectionError from OpenAI often wraps SSL errors
+                is_ssl_error = False
+                
+                # Method 1: Check if it's APIConnectionError (OpenAI wraps SSL errors in this)
+                # Most APIConnectionError from OpenAI are SSL-related, so we'll try SSL fallback
+                if "APIConnectionError" in error_type:
+                    is_ssl_error = True
+                    # Check the underlying cause for more details
+                    if underlying_error:
+                        underlying_error_str = str(underlying_error)
+                        print(f"   🔍 Underlying error type: {type(underlying_error).__name__}")
+                        if any(term in underlying_error_str.lower() for term in [
+                            "certificate", "ssl", "certificate_verify_failed", 
+                            "certificate is not yet valid", "certificate verify failed"
+                        ]):
+                            print(f"   ✅ Confirmed: SSL certificate error in underlying exception")
+                        elif "ConnectError" in underlying_type:
+                            print(f"   ✅ Confirmed: ConnectError (likely SSL-related)")
+                # Method 1b: Check for ConnectError directly (also often SSL)
+                elif "ConnectError" in error_type:
+                    is_ssl_error = True
+                
+                # Method 2: Direct SSL error indicators
+                if not is_ssl_error:
+                    is_ssl_error = (
+                        "certificate" in error_str or "ssl" in error_str or 
+                        "certificate verify failed" in error_str or
+                        "certificate is not yet valid" in error_str or
+                        "certificate" in underlying_str or "ssl" in underlying_str or
+                        "certificate verify failed" in underlying_str or
+                        "certificate is not yet valid" in underlying_str or
+                        "CERTIFICATE_VERIFY_FAILED" in str(api_error) or
+                        "ConnectError" in error_type or
+                        "ConnectError" in underlying_type
+                    )
+                
+                if is_ssl_error:
+                    print(f"   ⚠️  SSL certificate error detected: {error_type}")
+                    if underlying_error:
+                        print(f"   🔍 Underlying error: {type(underlying_error).__name__}: {str(underlying_error)[:200]}")
+                    print("   💡 This might be due to:")
+                    print("      1. System clock is incorrect (check system time with: date)")
+                    print("      2. SSL certificate verification issue")
+                    print("   💡 Trying with SSL verification disabled (less secure but will work)...")
+                    
+                    # Try with SSL verification disabled as fallback
+                    import httpx
+                    import warnings
+                    
+                    # Suppress SSL warnings when we disable verification
+                    warnings.filterwarnings('ignore', message='Unverified HTTPS request')
+                    
+                    # Create a custom HTTP client with SSL verification disabled
+                    try:
+                        # Get the API key - try multiple methods
+                        api_key = None
+                        # Method 1: Try from environment (most reliable)
+                        api_key = os.getenv('OPENAI_API_KEY')
+                        # Method 2: Try direct attribute
+                        if not api_key and hasattr(self.openai_client, 'api_key'):
+                            api_key = self.openai_client.api_key
+                        # Method 3: Try from _client internal attribute
+                        if not api_key and hasattr(self.openai_client, '_client'):
+                            try:
+                                client_obj = self.openai_client._client
+                                if hasattr(client_obj, 'api_key'):
+                                    api_key = client_obj.api_key
+                            except:
+                                pass
+                        
+                        if not api_key:
+                            raise Exception("Could not retrieve API key for SSL fallback - check OPENAI_API_KEY in .env")
+                        
+                        # Reinitialize OpenAI client with SSL verification disabled
+                        from openai import OpenAI
+                        custom_client = OpenAI(
+                            api_key=api_key,
+                            http_client=httpx.Client(
+                                verify=False,  # Disable SSL verification
+                                timeout=30.0,
+                                follow_redirects=True
+                            )
+                        )
+                        
+                        print("   🔄 Retrying API call with SSL verification disabled...")
+                        # Try again with custom client
+                        response = custom_client.chat.completions.create(
+                            model=self.model,
+                            messages=messages,
+                            temperature=0.7,
+                            max_tokens=800,
+                            timeout=30.0
+                        )
+                        print("   ✅ Connected successfully with SSL verification disabled")
+                        # Update the client for future use so we don't need to recreate it
+                        self.openai_client = custom_client
+                    except Exception as retry_error:
+                        print(f"   ❌ Retry with SSL disabled also failed: {retry_error}")
+                        print(f"   ❌ Error type: {type(retry_error).__name__}")
+                        # Don't re-raise - let it fall through to outer handler
+                        # The outer handler will return a graceful fallback message
+                        raise api_error from retry_error
+                else:
+                    # Not an SSL error, re-raise to be handled by outer exception handler
+                    raise
 
             print(f"   ✅ Received response from OpenAI", flush=True)
             sys.stdout.flush()
@@ -1646,13 +2740,54 @@ Keep responses concise and helpful."""
                 continuation_messages.append({"role": "user", "content": "أكمل رسالتك من حيث توقفت. (Complete your message from where you left off.)"})
                 
                 try:
-                    continuation_response = self.openai_client.chat.completions.create(
-                        model=self.model,
-                        messages=continuation_messages,
-                        temperature=0.7,
-                        max_tokens=400,
-                        timeout=20.0
-                    )
+                    try:
+                        continuation_response = self.openai_client.chat.completions.create(
+                            model=self.model,
+                            messages=continuation_messages,
+                            temperature=0.7,
+                            max_tokens=400,
+                            timeout=20.0
+                        )
+                    except Exception as cont_error:
+                        # Check if this is an SSL/certificate error
+                        error_str = str(cont_error).lower()
+                        underlying_error = getattr(cont_error, '__cause__', None) or getattr(cont_error, '__context__', None)
+                        underlying_str = str(underlying_error).lower() if underlying_error else ""
+                        
+                        is_ssl_error = (
+                            "certificate" in error_str or "ssl" in error_str or 
+                            "certificate verify failed" in error_str or
+                            "certificate" in underlying_str or "ssl" in underlying_str or
+                            "CERTIFICATE_VERIFY_FAILED" in str(cont_error) or
+                            "ConnectError" in type(cont_error).__name__
+                        )
+                        
+                        if is_ssl_error:
+                            print(f"   ⚠️  SSL certificate error in continuation")
+                            print("   💡 Trying with SSL verification disabled...")
+                            
+                            # Use custom client with SSL verification disabled
+                            import httpx
+                            from openai import OpenAI
+                            
+                            # Get API key
+                            api_key = getattr(self.openai_client, 'api_key', None) or os.getenv('OPENAI_API_KEY')
+                            
+                            custom_client = OpenAI(
+                                api_key=api_key,
+                                http_client=httpx.Client(verify=False, timeout=20.0, follow_redirects=True)
+                            )
+                            
+                            continuation_response = custom_client.chat.completions.create(
+                                model=self.model,
+                                messages=continuation_messages,
+                                temperature=0.7,
+                                max_tokens=400,
+                                timeout=20.0
+                            )
+                        else:
+                            raise
+                    
                     continuation = continuation_response.choices[0].message.content.strip()
                     # Only append if continuation makes sense (not a duplicate start)
                     if continuation and len(continuation) > 10:
@@ -1724,6 +2859,14 @@ Keep responses concise and helpful."""
             self.conversations[phone].append({"role": "user", "content": message})
             self.conversations[phone].append({"role": "assistant", "content": clean_response})
 
+            # Mark customer as responded (for follow-up tracking)
+            if phone in self.last_contact_time:
+                self.customer_responded[phone] = True
+                # Reset follow-up flag since customer responded
+                self.followup_sent[phone] = False
+                # Save state after customer responds
+                self._save_state()
+
             # Keep only last 20 messages
             if len(self.conversations[phone]) > 20:
                 self.conversations[phone] = self.conversations[phone][-20:]
@@ -1733,6 +2876,39 @@ Keep responses concise and helpful."""
             return clean_response
 
         except Exception as e:
+            # Check if this is an SSL error that wasn't caught by the inner handler
+            error_str = str(e).lower()
+            error_type = type(e).__name__
+            underlying_error = getattr(e, '__cause__', None) or getattr(e, '__context__', None)
+            underlying_str = str(underlying_error).lower() if underlying_error else ""
+            
+            # Check if it's an SSL/certificate error (might have been missed)
+            is_ssl_error = (
+                "certificate" in error_str or "ssl" in error_str or 
+                "certificate verify failed" in error_str or
+                "certificate is not yet valid" in error_str or
+                "certificate" in underlying_str or "ssl" in underlying_str or
+                "certificate verify failed" in underlying_str or
+                "CERTIFICATE_VERIFY_FAILED" in str(e) or
+                "ConnectError" in error_type or
+                "APIConnectionError" in error_type  # OpenAI wraps SSL errors in APIConnectionError
+            )
+            
+            # If it's an SSL error that reached here, the inner handler's fallback didn't work
+            # This could mean API key retrieval failed, or there's another issue
+            if is_ssl_error:
+                # This is likely an SSL error wrapped in APIConnectionError
+                print(f"⚠️  SSL certificate error (caught in outer handler): {error_type}", flush=True)
+                if underlying_error:
+                    print(f"   🔍 Underlying: {type(underlying_error).__name__}: {str(underlying_error)[:150]}", flush=True)
+                print("   💡 This is likely due to system clock being incorrect", flush=True)
+                print("   💡 Check system time with: date", flush=True)
+                print("   💡 Fix time with: sudo sntp -sS time.apple.com", flush=True)
+                print("   💡 Or manually set time in System Settings → Date & Time", flush=True)
+                sys.stdout.flush()
+                # Return a helpful message in Arabic/English
+                return "شكراً لك على رسالتك! سنتواصل معك قريباً."
+            
             print(f"⚠️  AI response error: {e}", flush=True)
             sys.stdout.flush()
             import traceback
@@ -1740,13 +2916,14 @@ Keep responses concise and helpful."""
             sys.stdout.flush()
             return "Thank you for your message. We'll get back to you soon."
 
-    def start_monitoring_contact(self, phone: str):
+    def start_monitoring_contact(self, phone: str, skip_chat_open: bool = False):
         """
         Start monitoring a contact - clears conversation history and marks existing messages as seen.
         Call this when you first add a contact to monitoring.
 
         Args:
             phone: Phone number to start monitoring
+            skip_chat_open: If True, skip opening the chat (assumes we're already in it)
         """
         try:
             phone = self._format_phone(phone)
@@ -1762,23 +2939,223 @@ Keep responses concise and helpful."""
                 self.conversations[phone] = []
 
             # Mark all existing messages as "seen" to avoid responding to old messages
-            try:
-                # Open chat
-                url = f"https://web.whatsapp.com/send?phone={phone.replace('+', '')}"
-                self.driver.get(url)
-                time.sleep(3)
-
-                # Use get_new_messages to populate seen_message_ids
-                # This will mark all current messages as "seen"
-                _ = self.get_new_messages(phone)
-                print(f"   {len(self.seen_message_ids.get(phone, set()))} existing messages marked as seen")
-            except Exception as e:
-                print(f"   ⚠️  Could not mark existing messages as seen: {e}")
+            if not skip_chat_open:
+                try:
+                    # Open chat safely (only if not already in it)
+                    if not self._open_chat_safely(phone):
+                        print(f"   ⚠️  Could not open chat for {phone}")
+                    else:
+                        time.sleep(2)  # Wait for chat to stabilize
+                        # Use get_new_messages to populate seen_message_ids
+                        # This will mark all current messages as "seen"
+                        _ = self.get_new_messages(phone, skip_chat_open=True)
+                        print(f"   {len(self.seen_message_ids.get(phone, set()))} existing messages marked as seen")
+                except Exception as e:
+                    print(f"   ⚠️  Could not mark existing messages as seen: {e}")
+            else:
+                # We're already in the chat, just mark existing messages as seen
+                try:
+                    # Initialize seen_message_ids if needed
+                    if phone not in self.seen_message_ids:
+                        self.seen_message_ids[phone] = set()
+                    if phone not in self.seen_message_texts:
+                        self.seen_message_texts[phone] = set()
+                    
+                    # Mark all currently visible messages as seen
+                    _ = self.get_new_messages(phone, skip_chat_open=True)
+                    print(f"   {len(self.seen_message_ids.get(phone, set()))} existing messages marked as seen")
+                except Exception as e:
+                    print(f"   ⚠️  Could not mark existing messages as seen: {e}")
 
             print(f"✅ Monitoring started for {phone} - conversation history cleared")
 
         except Exception as e:
             print(f"⚠️  Error starting monitoring for {phone}: {e}")
+
+    def _load_followup_message_from_json(self) -> Optional[str]:
+        """Load follow-up message template from JSON file, with fallback to default"""
+        try:
+            message_file = Path("followup_message.json")
+            if message_file.exists():
+                with open(message_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    message = data.get('message_template', '')
+                    if message:
+                        return message
+            return None
+        except Exception as e:
+            print(f"⚠️ Error loading followup_message.json: {e}")
+            return None
+
+    def _generate_followup_message(self, phone: str) -> str:
+        """
+        Generate a follow-up message for a customer who didn't respond.
+        
+        Args:
+            phone: Customer phone number
+            
+        Returns:
+            Follow-up message text
+        """
+        # Get customer name if available
+        customer_name = "Customer"
+        if self.contacts_df is not None:
+            try:
+                # Try to find customer in contacts_df
+                phone_clean = phone.replace('+', '').replace(' ', '').replace('-', '')
+                for idx, row in self.contacts_df.iterrows():
+                    row_phone = str(row.get('phone_formatted', row.get('phone', '')))
+                    row_phone_clean = row_phone.replace('+', '').replace(' ', '').replace('-', '')
+                    if phone_clean in row_phone_clean or row_phone_clean in phone_clean:
+                        customer_name = str(row.get('name', 'Customer'))
+                        break
+            except Exception:
+                pass  # Use default name if lookup fails
+        
+        # Use custom template if provided, otherwise use default from JSON or fallback
+        if self.followup_message_template:
+            # Replace placeholders
+            message = self.followup_message_template
+            message = message.replace('{name}', customer_name)
+            message = message.replace('{phone}', phone)
+            return message
+        
+        # Use default from JSON file if available
+        if self.default_followup_template:
+            message = self.default_followup_template
+            message = message.replace('{name}', customer_name)
+            message = message.replace('{phone}', phone)
+            return message
+        
+        # Fallback to hardcoded default (should not happen if JSON exists)
+        default_followup = f"""مرحباً {customer_name}! 👋
+
+نشكرك على وقتك. نود أن نتأكد أنك رأيت عرضنا على Tiger Balm.
+
+هل لديك أي أسئلة؟ نحن هنا للمساعدة! 💬"""
+        
+        return default_followup
+
+    def _check_and_send_followups(self, contacts: List[str]) -> int:
+        """
+        Check which contacts need follow-up messages and send them.
+        
+        Args:
+            contacts: List of phone numbers to check
+            
+        Returns:
+            Number of follow-ups sent
+        """
+        if not self.followup_enabled:
+            return 0
+        
+        followups_sent = 0
+        current_time = datetime.now()
+        
+        for phone in contacts:
+            try:
+                # Check if this contact is eligible for follow-up
+                if phone not in self.last_contact_time:
+                    continue  # Never contacted, skip
+                
+                # Skip if customer already responded
+                if self.customer_responded.get(phone, False):
+                    continue  # Customer responded, no follow-up needed
+                
+                # Skip if we already sent a follow-up
+                if self.followup_sent.get(phone, False):
+                    continue  # Already sent follow-up
+                
+                # Check if enough time has passed
+                last_contact = self.last_contact_time[phone]
+                time_since_contact = (current_time - last_contact).total_seconds() / 60  # Convert to minutes
+                
+                if time_since_contact >= self.followup_delay_minutes:
+                    # Time to send follow-up!
+                    print(f"📬 Sending follow-up to {phone} (no response after {time_since_contact:.1f} minutes)")
+                    
+                    # Generate follow-up message
+                    followup_msg = self._generate_followup_message(phone)
+                    
+                    # Send follow-up message
+                    # Note: pass is_followup=True to allow sending even if contact is already in monitored_contacts
+                    if self.send_message(phone, followup_msg, media_path=None, is_followup=True):
+                        self.followup_sent[phone] = True
+                        # DON'T update last_contact_time - keep original contact time for tracking
+                        # We update followup_sent flag to prevent sending multiple follow-ups
+                        followups_sent += 1
+                        # Save state after sending follow-up
+                        self._save_state()
+                        print(f"   ✅ Follow-up sent to {phone}")
+                    else:
+                        print(f"   ❌ Failed to send follow-up to {phone}")
+                        
+            except Exception as e:
+                print(f"   ⚠️  Error sending follow-up to {phone}: {e}")
+                continue
+        
+        if followups_sent > 0:
+            print(f"📊 Sent {followups_sent} follow-up message(s)")
+        
+        return followups_sent
+
+    def _check_all_contacts_parallel(self, contacts: List[str]) -> Dict[str, Optional[str]]:
+        """
+        Optimized contact checking: Uses faster sequential checking with reduced waits.
+        
+        NOTE: WhatsApp Web only allows ONE active session per account, so we cannot use
+        multiple browser instances for true parallelism. This method optimizes the
+        sequential checking process by:
+        1. Reducing wait times (2-3s instead of 3-5s per contact)
+        2. Reducing verbose logging (faster execution)
+        3. Using smart caching to skip already-seen messages
+        4. Batch processing all contacts in one cycle
+        
+        Args:
+            contacts: List of phone numbers to check
+            
+        Returns:
+            Dictionary mapping phone -> new message text (or None if no new message)
+        """
+        results = {phone: None for phone in contacts}
+        
+        if not contacts:
+            return results
+        
+        print(f"⚡ Optimized check: Processing {len(contacts)} contacts efficiently...")
+        print(f"   (WhatsApp Web allows only 1 session, so sequential checking is optimized)")
+        
+        # Check contacts sequentially with optimizations:
+        # - Reduced wait times (40-50% faster than before)
+        # - Smart message deduplication (skip already-seen messages)
+        # - Minimal logging for faster execution
+        
+        start_time = time.time()
+        for idx, phone in enumerate(contacts):
+            try:
+                # Quick check: use get_new_messages with optimized settings
+                # The method already has smart caching and deduplication
+                new_msg = self.get_new_messages(phone, skip_chat_open=False)
+                
+                if new_msg:
+                    results[phone] = new_msg
+                    print(f"   ✅ {phone}: New message found")
+                # No new message - result stays None (no logging for speed)
+                    
+            except Exception as e:
+                print(f"   ⚠️  Error checking {phone}: {e}")
+                results[phone] = None
+                continue
+        
+        # Count results and show performance
+        elapsed_time = time.time() - start_time
+        new_messages_count = sum(1 for msg in results.values() if msg is not None)
+        avg_time_per_contact = elapsed_time / len(contacts) if contacts else 0
+        
+        print(f"📊 Check complete: {new_messages_count} contacts have new messages out of {len(contacts)}")
+        print(f"   ⏱️  Total time: {elapsed_time:.1f}s | Avg: {avg_time_per_contact:.1f}s per contact")
+        
+        return results
 
     def _background_monitoring_loop(self):
         """Background thread that continuously monitors contacts for new messages"""
@@ -1786,51 +3163,190 @@ Keep responses concise and helpful."""
         
         while self.auto_monitoring_active:
             try:
+                # Skip monitoring if bulk sending is active (to avoid race conditions)
+                if self.bulk_sending_active:
+                    time.sleep(1)  # Short sleep, then check again
+                    continue
+                
                 # Get list of contacts to monitor (thread-safe)
                 with self.monitoring_lock:
-                    # Only monitor contacts that are not stopped
-                    active_contacts = [
-                        phone for phone in self.monitored_contacts 
-                        if phone not in self.monitoring_stopped_contacts
-                    ]
+                    # If there are test contacts, only monitor test contacts (don't check real customers during testing)
+                    # This prevents checking all 76+ real customers when you're just testing
+                    if self.test_contacts:
+                        # Only monitor test contacts when testing
+                        active_contacts = [
+                            phone for phone in self.monitored_contacts 
+                            if phone in self.test_contacts 
+                            and phone not in self.monitoring_stopped_contacts
+                        ]
+                        # Only log this once per cycle to avoid spam
+                        if len(active_contacts) > 0 and len(active_contacts) < len(self.monitored_contacts):
+                            # There are test contacts, so we're only monitoring those (not real customers)
+                            pass  # Will be logged below with actual count
+                    else:
+                        # No test contacts, monitor all real customers normally
+                        active_contacts = [
+                            phone for phone in self.monitored_contacts 
+                            if phone not in self.monitoring_stopped_contacts
+                        ]
                 
                 if not active_contacts:
                     # No contacts to monitor, wait a bit and check again
                     time.sleep(self.monitoring_check_interval)
                     continue
                 
-                # Check each contact for new messages
-                for phone in active_contacts:
-                    if not self.auto_monitoring_active:
-                        break
+                # Use optimized batch checking (faster sequential with reduced waits)
+                if self.test_contacts and len(active_contacts) > 0:
+                    # Only monitoring test contacts (not real customers) - this is a test scenario
+                    total_real = len([c for c in self.monitored_contacts if c not in self.test_contacts])
+                    if total_real > 0:
+                        print(f"⚡ Checking {len(active_contacts)} test contact(s) only (skipping {total_real} real customers during testing)...")
+                    else:
+                        print(f"⚡ Checking {len(active_contacts)} test contact(s)...")
+                else:
+                    print(f"⚡ Checking {len(active_contacts)} contacts efficiently...")
+                try:
+                    # Check all contacts using optimized method (reduced waits, less logging)
+                    contact_messages = self._check_all_contacts_parallel(active_contacts)
                     
-                    try:
-                        # Check for new messages
-                        new_msg = self.get_new_messages(phone)
+                    # Process results
+                    for phone, new_msg in contact_messages.items():
+                        if not self.auto_monitoring_active:
+                            break
+                        
+                        # Double-check bulk_sending_active
+                        if self.bulk_sending_active:
+                            break
                         
                         if new_msg:
                             print(f"\n📨 New message from {phone}!")
                             print(f"   Customer: {new_msg[:100]}...")
                             
-                            # Generate AI response
+                            # CRITICAL: Mark this message as seen IMMEDIATELY to prevent duplicate processing
+                            # This prevents the same message from being detected as new again
+                            msg_text_fingerprint = new_msg[:100] if len(new_msg) > 100 else new_msg
+                            if phone not in self.seen_message_texts:
+                                self.seen_message_texts[phone] = set()
+                            self.seen_message_texts[phone].add(msg_text_fingerprint)
+                            
+                            # Mark customer as responded (for follow-up tracking)
+                            is_first_response = False
+                            if phone in self.last_contact_time:
+                                # Check if this is the first response from this customer
+                                is_first_response = not self.customer_responded.get(phone, False)
+                                self.customer_responded[phone] = True
+                                # Reset follow-up flag since customer responded
+                                self.followup_sent[phone] = False
+                            
+                            # Generate AI response FIRST (before sending media)
+                            ai_response = None
+                            pending_media_path = None
+                            pending_media_2_path = None
+                            
                             if self.ai_enabled:
                                 print(f"   🤖 Generating AI response...")
                                 ai_response = self.generate_ai_response(new_msg, phone)
+                            
+                            # Check if this is first response and we have pending media
+                            # Main media should be attached to the AI response
+                            if is_first_response and phone in self.pending_media:
+                                pending_media_path = self.pending_media[phone]
+                                # Check if media hasn't been sent yet
+                                if not self.media_sent_after_response.get(phone, False):
+                                    # Ensure path is absolute (in case it was stored as relative)
+                                    pending_media_path = str(Path(pending_media_path).absolute())
+                                    
+                                    if not os.path.exists(pending_media_path):
+                                        print(f"   ⚠️  Pending media file not found: {pending_media_path}")
+                                        print(f"   💡 Make sure the media file exists and wasn't deleted")
+                                        # Remove invalid pending media
+                                        del self.pending_media[phone]
+                                        if phone in self.pending_media_2:
+                                            del self.pending_media_2[phone]
+                                        pending_media_path = None
+                                    
+                                    # Check for second media
+                                    if phone in self.pending_media_2:
+                                        pending_media_2_path = self.pending_media_2[phone]
+                                        pending_media_2_path = str(Path(pending_media_2_path).absolute())
+                                        if not os.path.exists(pending_media_2_path):
+                                            print(f"   ⚠️  Second media file not found: {pending_media_2_path}")
+                                            del self.pending_media_2[phone]
+                                            pending_media_2_path = None
+                            
+                            # Send AI response WITH main media (if first response and media exists)
+                            if ai_response:
+                                print(f"   📤 Sending AI response{' with main media' if pending_media_path and is_first_response else ''}...")
                                 
-                                # Send response
-                                print(f"   📤 Sending AI response...")
-                                if self.send_message(phone, ai_response):
-                                    self.ai_responses_sent += 1
-                                    print(f"   ✅ Response sent successfully to {phone}")
+                                # Send AI response with main media attached (if first response)
+                                if is_first_response and pending_media_path and not self.media_sent_after_response.get(phone, False):
+                                    # Send AI response WITH main media attached
+                                    if self.send_message(phone, ai_response, media_path=pending_media_path):
+                                        self.ai_responses_sent += 1
+                                        self.media_sent_after_response[phone] = True
+                                        print(f"   ✅ AI response with main media sent successfully to {phone}")
+                                        
+                                        # Add to conversation history
+                                        if phone not in self.conversations:
+                                            self.conversations[phone] = []
+                                        self.conversations[phone].append({
+                                            "role": "assistant",
+                                            "content": f"{ai_response} [Main media attached: {Path(pending_media_path).name}]"
+                                        })
+                                        
+                                        # NOW send second media separately (after a short delay)
+                                        if pending_media_2_path and not self.media_2_sent_after_response.get(phone, False):
+                                            print(f"   📎 Sending second media (free product) to {phone}...")
+                                            print(f"   📁 Second media file: {Path(pending_media_2_path).name}")
+                                            # Small delay between messages
+                                            time.sleep(3)
+                                            
+                                            # Send second media with empty caption
+                                            if self._open_chat_safely(phone):
+                                                media_2_sent = self._send_media(pending_media_2_path, "")
+                                                if media_2_sent:
+                                                    self.media_2_sent_after_response[phone] = True
+                                                    print(f"   ✅ Second media (free product) sent successfully to {phone}")
+                                                    self.conversations[phone].append({
+                                                        "role": "assistant",
+                                                        "content": f"[Free product media sent: {Path(pending_media_2_path).name}]"
+                                                    })
+                                                else:
+                                                    print(f"   ⚠️  Failed to send second media to {phone}")
+                                            else:
+                                                print(f"   ⚠️  Failed to open chat for {phone} - cannot send second media")
+                                        
+                                        # Save state after sending media
+                                        self._save_state()
+                                    else:
+                                        print(f"   ❌ Failed to send AI response with main media to {phone}")
                                 else:
-                                    print(f"   ❌ Failed to send response to {phone}")
+                                    # No media, just send AI response as text
+                                    if self.send_message(phone, ai_response):
+                                        self.ai_responses_sent += 1
+                                        print(f"   ✅ AI response sent successfully to {phone}")
+                                    else:
+                                        print(f"   ❌ Failed to send AI response to {phone}")
                             else:
+                                # AI not enabled - no response generated
                                 print(f"   ⚠️  AI not enabled - skipping response")
+                            
+                            # Save state after customer responds (skip for test contacts)
+                            if phone not in self.test_contacts:
+                                self._save_state()
                     
-                    except Exception as e:
-                        print(f"   ⚠️  Error checking/responding to {phone}: {e}")
-                        import traceback
-                        traceback.print_exc()
+                    # Check for follow-ups (customers who didn't respond)
+                    if self.followup_enabled and not self.bulk_sending_active:
+                        try:
+                            self._check_and_send_followups(active_contacts)
+                        except Exception as followup_err:
+                            print(f"⚠️  Error in follow-up check: {followup_err}")
+                
+                except Exception as e:
+                    print(f"⚠️  Error in optimized checking: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    # The method already handles errors per contact, so we continue
                 
                 # Wait before next check cycle
                 time.sleep(self.monitoring_check_interval)
@@ -1918,14 +3434,14 @@ Keep responses concise and helpful."""
             phone = self._format_phone(phone)
             print(f"🔄 Initializing message tracking for {phone}...")
 
-            # Open chat
-            url = f"https://web.whatsapp.com/send?phone={phone.replace('+', '')}"
-            self.driver.get(url)
-            time.sleep(5)
-
+            # Open chat safely (with lock to prevent race conditions)
+            if not self._open_chat_safely(phone):
+                print(f"⚠️  Could not open chat for {phone}")
+                return
+            
             # Use get_new_messages to populate seen_message_ids without returning anything
             # This will mark all current messages as "seen"
-            _ = self.get_new_messages(phone)
+            _ = self.get_new_messages(phone, skip_chat_open=True)
 
             print(f"✅ Message tracking initialized for {phone}")
             print(f"   {len(self.seen_message_ids.get(phone, set()))} messages marked as seen")

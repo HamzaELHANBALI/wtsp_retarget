@@ -5,7 +5,68 @@ Demonstrates sending messages and AI auto-responses
 
 from whatsapp_bot import WhatsAppBot
 import os
+import json
 from pathlib import Path
+
+# Helper functions to load configuration from JSON files
+def load_noura_prompt(prompt_file_name=None):
+    """Load Noura prompt from JSON file, with fallback to default
+    
+    Args:
+        prompt_file_name: Name of the prompt file to load (e.g., 'noura_prompt.json', 'noura_lighter_watch_bundle_prompt.json')
+                         If None, tries default files in order: noura_lighter_watch_bundle_prompt.json, noura_electric_ashtray_prompt.json, noura_prompt.json
+    """
+    # Default priority: ultimate closer (new default), then lighter watch bundle, then electric ashtray, then tiger balm (old)
+    default_files = ["noura_ultimate_closer_prompt.json", "noura_lighter_watch_bundle_prompt.json", "noura_electric_ashtray_prompt.json", "noura_prompt.json"]
+    
+    files_to_try = [prompt_file_name] if prompt_file_name else default_files
+    
+    for filename in files_to_try:
+        try:
+            prompt_file = Path(filename)
+            if prompt_file.exists():
+                with open(prompt_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    prompt = data.get('system_prompt', '')
+                    if prompt:
+                        return prompt
+        except Exception as e:
+            # Continue to next file if this one fails
+            print(f"⚠️ Error loading {filename}: {e}")
+            continue
+    
+    # If no file found or all failed, return None to use fallback
+    return None
+
+def list_available_prompt_files():
+    """List all available prompt JSON files in the current directory"""
+    prompt_files = []
+    for file in Path(".").glob("noura*_prompt.json"):
+        if file.is_file():
+            prompt_files.append(file.name)
+    # Sort to have ultimate closer first (default), then lighter watch bundle, then electric ashtray
+    prompt_files.sort(key=lambda x: (
+        x != "noura_ultimate_closer_prompt.json",
+        x != "noura_lighter_watch_bundle_prompt.json",
+        x != "noura_electric_ashtray_prompt.json",
+        x
+    ))
+    return prompt_files
+
+def load_initial_message():
+    """Load initial message template from JSON file, with fallback to default"""
+    try:
+        message_file = Path("initial_message.json")
+        if message_file.exists():
+            with open(message_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                message = data.get('message_template', '')
+                if message:
+                    return message
+        return None
+    except Exception as e:
+        print(f"⚠️ Error loading initial_message.json: {e}")
+        return None
 
 # Configuration
 CONTACTS = [
@@ -13,37 +74,29 @@ CONTACTS = [
     # Add more contacts as needed
 ]
 
-# Message to send
-MESSAGE = """السلام عليكم 👋
+# Load initial message from JSON file
+_default_message = load_initial_message()
+if _default_message is None:
+    # Fallback to hardcoded message if JSON file doesn't exist (matches initial_message.json format)
+    MESSAGE = "السلام عليكم Customer 👋 كيف حالك؟"
+else:
+    # Use message from JSON file - replace {name} placeholder with "Customer" for testing
+    MESSAGE = _default_message.replace("{name}", "Customer")
 
-🐯 Tiger Balm الأصلي - عرض حصري محدود!
-
-🔥 عرضين استثنائيين:
-   1️⃣ حبة وحدة → 89 ريال
-   2️⃣ عرض العائلة (3 حبات) → 149 ريال بس!
-
-💡 يعني كل حبة بـ50 ريال (توفير 118 ريال!)
-
-✨ مميزات الطلب:
-✅ دفع عند الاستلام (COD)
-✅ توصيل 24-48 ساعة لبابك
-✅ منتج أصلي 100% مضمون
-
-مناسب لـ:
-• آلام الظهر والرقبة
-• الصداع والشقيقة
-• آلام العضلات والمفاصل
-
-⚠️ العرض ينتهي قريباً - الكمية محدودة!
-
-تبي تستفيد من العرض؟"""
-
-# Optional: Media file path
+# Optional: Media file paths
 # Set to None for text-only, or provide path to image/video
+# Main media: Sent after customer responds
 MEDIA_FILE = "/Users/hamzaelhanbali/Desktop/personal/tiger/hamza_tiger_27_octobre_1.mp4"  # Update this path
+# Second media (free product): Sent immediately after main media
+MEDIA_FILE_2 = None  # Optional: Path to free product media (e.g., electric ashtray)
 
-# AI System Prompt (customize for your business)
-SYSTEM_PROMPT = """
+# Load AI System Prompt from JSON file (defaults to lighter watch bundle)
+# Change prompt_file_name to use a different prompt file
+prompt_file_name = None  # None = use default (lighter watch bundle), or specify: "noura_electric_ashtray_prompt.json"
+_default_prompt = load_noura_prompt(prompt_file_name)
+if _default_prompt is None:
+    # Fallback to hardcoded prompt if JSON file doesn't exist
+    SYSTEM_PROMPT = """
 You are Noura, a sales consultant at Tiger Balm call center in Saudi Arabia. Your mission: BUILD TRUST → ANSWER QUESTIONS → CLOSE THE SALE.
 
 ## CORE RULES
@@ -187,6 +240,9 @@ Always have it home. 90% choose 3-pack - smarter 💡 Reconsider?"
 - Add [LEAD_CONFIRMED] marker and STOP after city
 - Stay in character as helpful, knowledgeable Noura
             """
+else:
+    # Use prompt from JSON file
+    SYSTEM_PROMPT = _default_prompt
 
 
 def main():
@@ -197,13 +253,31 @@ def main():
     print("="*60)
     print(f"\n📋 Configuration:")
     print(f"   Contacts: {len(CONTACTS)}")
-    print(f"   Media: {'Yes' if MEDIA_FILE else 'No'}")
+    print(f"   Main Media: {'Yes' if MEDIA_FILE else 'No'}")
+    print(f"   Second Media (Free Product): {'Yes' if MEDIA_FILE_2 else 'No'}")
     print(f"   AI: Enabled (if API key configured)")
+    # List available prompts
+    available_prompts = list_available_prompt_files()
+    prompt_source = prompt_file_name if prompt_file_name else ("noura_ultimate_closer_prompt.json" if "noura_ultimate_closer_prompt.json" in available_prompts else ("noura_lighter_watch_bundle_prompt.json" if "noura_lighter_watch_bundle_prompt.json" in available_prompts else ("noura_electric_ashtray_prompt.json" if "noura_electric_ashtray_prompt.json" in available_prompts else ("noura_prompt.json" if "noura_prompt.json" in available_prompts else "default"))))
+    
+    print(f"   Initial Message: Loaded from initial_message.json" if _default_message else "   Initial Message: Using fallback")
+    print(f"   System Prompt: Loaded from {prompt_source}" if _default_prompt else "   System Prompt: Using fallback")
+    print(f"   Available prompt files: {', '.join(available_prompts) if available_prompts else 'None'}")
+    print(f"   Follow-up Message: Loaded automatically from followup_message.json (if enabled)")
     print("\n" + "="*60 + "\n")
 
     # Initialize bot
+    # Note: Follow-up messages are automatically loaded from followup_message.json
+    # The bot will use the JSON file if it exists, otherwise it will use the default
     try:
-        bot = WhatsAppBot(system_prompt=SYSTEM_PROMPT)
+        # Initialize bot in test mode (skip bot_state.json - reserved for real customers)
+        bot = WhatsAppBot(system_prompt=SYSTEM_PROMPT, test_mode=True)
+        # Configure follow-up settings (optional - defaults are in WhatsAppBot)
+        # bot.followup_enabled = True  # Enable follow-ups (default: True)
+        # bot.followup_delay_minutes = 60  # Delay before follow-up in minutes (default: 60)
+        print("✅ Bot initialized successfully (test mode - bot_state.json skipped)")
+        print(f"   Follow-up enabled: {bot.followup_enabled}")
+        print(f"   Follow-up delay: {bot.followup_delay_minutes} minutes")
     except Exception as e:
         print(f"❌ Failed to initialize bot: {e}")
         return
@@ -218,7 +292,8 @@ def main():
             success = bot.send_message(
                 phone=contact,
                 message=MESSAGE,
-                media_path=MEDIA_FILE
+                media_path=MEDIA_FILE,
+                media_path_2=MEDIA_FILE_2
             )
 
             if success:
@@ -243,6 +318,8 @@ def main():
         print("   - Check for incoming messages every 10 seconds")
         print("   - Automatically respond using AI")
         print("   - Maintain conversation context per contact")
+        if bot.followup_enabled:
+            print(f"   - Send follow-up messages after {bot.followup_delay_minutes} minutes if no response")
         print("\n   Press Ctrl+C to stop monitoring\n")
         print("="*60 + "\n")
 

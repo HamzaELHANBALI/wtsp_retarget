@@ -1,0 +1,5 @@
+{
+  "message_template": "السلام عليكم {name} 👋 كيف حالك؟",
+  "description": "Initial message template sent to customers. Use {name}, {phone}, and {custom_message} as placeholders."
+}
+

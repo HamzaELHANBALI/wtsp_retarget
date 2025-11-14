@@ -4,6 +4,7 @@ import time
 import os
 import re
 import shutil
+import json
 from pathlib import Path
 from datetime import datetime
 import threading
@@ -61,6 +62,85 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Helper functions to load configuration from JSON files
+def load_noura_prompt(prompt_file_name=None):
+    """Load Noura prompt from JSON file, with fallback to default
+    
+    Args:
+        prompt_file_name: Name of the prompt file to load (e.g., 'noura_prompt.json', 'noura_lighter_watch_bundle_prompt.json')
+                         If None, tries default files in order: noura_lighter_watch_bundle_prompt.json, noura_electric_ashtray_prompt.json, noura_prompt.json
+    """
+    # Default priority: ultimate closer (new default), then lighter watch bundle, then electric ashtray, then tiger balm (old)
+    default_files = ["noura_ultimate_closer_prompt.json", "noura_lighter_watch_bundle_prompt.json", "noura_electric_ashtray_prompt.json", "noura_prompt.json"]
+    
+    files_to_try = [prompt_file_name] if prompt_file_name else default_files
+    
+    for filename in files_to_try:
+        try:
+            prompt_file = Path(filename)
+            if prompt_file.exists():
+                with open(prompt_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    prompt = data.get('system_prompt', '')
+                    if prompt:
+                        return prompt
+        except Exception as e:
+            # Continue to next file if this one fails
+            print(f"⚠️ Error loading {filename}: {e}")
+            continue
+    
+    # If no file found or all failed, return None to use fallback
+    return None
+
+def list_available_prompt_files():
+    """List all available prompt JSON files in the current directory"""
+    prompt_files = []
+    for file in Path(".").glob("noura*_prompt.json"):
+        if file.is_file():
+            prompt_files.append(file.name)
+    # Sort to have ultimate closer first (default), then lighter watch bundle, then electric ashtray
+    prompt_files.sort(key=lambda x: (
+        x != "noura_ultimate_closer_prompt.json",
+        x != "noura_lighter_watch_bundle_prompt.json",
+        x != "noura_electric_ashtray_prompt.json",
+        x
+    ))
+    return prompt_files
+
+def load_initial_message():
+    """Load initial message template from JSON file, with fallback to default"""
+    try:
+        message_file = Path("initial_message.json")
+        if message_file.exists():
+            with open(message_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                message = data.get('message_template', '')
+                if message:
+                    return message
+        # If file doesn't exist or message is empty, return None to use fallback
+        return None
+    except Exception as e:
+        # Silently fail and return None to use fallback
+        print(f"⚠️ Error loading initial_message.json: {e}")
+        return None
+
+def load_followup_message():
+    """Load follow-up message template from JSON file, with fallback to default"""
+    try:
+        message_file = Path("followup_message.json")
+        if message_file.exists():
+            with open(message_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                message = data.get('message_template', '')
+                if message:
+                    return message
+        # If file doesn't exist or message is empty, return None to use fallback
+        return None
+    except Exception as e:
+        # Silently fail and return None to use fallback
+        print(f"⚠️ Error loading followup_message.json: {e}")
+        return None
+
 # Initialize session state
 if 'bot' not in st.session_state:
     st.session_state.bot = None
@@ -78,6 +158,8 @@ if 'monitored_contacts' not in st.session_state:
     st.session_state.monitored_contacts = []
 if 'auto_monitoring_enabled' not in st.session_state:
     st.session_state.auto_monitoring_enabled = True
+if 'selected_contacts' not in st.session_state:
+    st.session_state.selected_contacts = []  # List of selected phone numbers for sending
 
 # Helper functions
 def auto_add_to_monitoring(phone):
@@ -216,12 +298,105 @@ with st.sidebar:
         index=0,
         help="Select your country code for phone number formatting"
     )
+    
+    # Bot State File Selection (for different clientele)
+    st.divider()
+    st.subheader("📊 Customer Database")
+    state_file_options = {
+        "Default": "bot_state.json",
+        "Smoking Clientele": "bot_state_smoking.json"
+    }
+    
+    if 'selected_state_file' not in st.session_state:
+        st.session_state.selected_state_file = "Smoking Clientele"
+    
+    # Calculate default index (Smoking Clientele is default)
+    default_index = list(state_file_options.keys()).index(st.session_state.selected_state_file) if st.session_state.selected_state_file in state_file_options else list(state_file_options.keys()).index("Smoking Clientele")
+    
+    selected_clientele = st.selectbox(
+        "Customer Database",
+        options=list(state_file_options.keys()),
+        index=default_index,
+        help="Select which customer database to use. Each database tracks contacts separately.",
+        key="clientele_selector"
+    )
+    
+    # Check if selection changed and bot is already initialized (before updating session state)
+    previous_selection = st.session_state.get('selected_state_file', 'Smoking Clientele')
+    if selected_clientele != previous_selection and st.session_state.logged_in:
+        st.warning("⚠️ Customer database changed! Please logout and reinitialize the bot to use the new database.")
+    
+    # Update session state
+    st.session_state.selected_state_file = selected_clientele
+    selected_state_file = state_file_options[selected_clientele]
+    
+    # Show info about the selected state file
+    state_file_path = Path(selected_state_file)
+    if state_file_path.exists():
+        file_size = state_file_path.stat().st_size
+        # Try to load and show stats
+        try:
+            with open(state_file_path, 'r', encoding='utf-8') as f:
+                state_data = json.load(f)
+                monitored_count = len(state_data.get('monitored_contacts', []))
+                st.caption(f"📄 Using: {selected_state_file} ({file_size:,} bytes, {monitored_count} contacts)")
+        except:
+            st.caption(f"📄 Using: {selected_state_file} ({file_size:,} bytes)")
+    else:
+        st.caption(f"📄 Will create: {selected_state_file} (new database)")
+    
+    st.caption("💡 Each database tracks its own contacts, conversation history, and follow-ups separately.")
 
     # System Prompt
     with st.expander("🤖 AI System Prompt"):
-        system_prompt = st.text_area(
-            "Customize AI Behavior",
-            value="""
+        # List available prompt files
+        available_prompts = list_available_prompt_files()
+        
+        # Initialize selected_prompt_file in session state if not exists
+        if 'selected_prompt_file' not in st.session_state:
+            # Default to lighter watch bundle if available
+            default_prompt_file = "noura_ultimate_closer_prompt.json"
+            if default_prompt_file in available_prompts:
+                st.session_state.selected_prompt_file = default_prompt_file
+            elif available_prompts:
+                st.session_state.selected_prompt_file = available_prompts[0]
+            else:
+                st.session_state.selected_prompt_file = None
+        
+        # Prompt file selection
+        if available_prompts:
+            st.markdown("**Select Prompt File**")
+            # Get display names (without extension, more readable)
+            prompt_options = {f: f.replace("noura_", "").replace("_prompt.json", "").replace("_", " ").title() 
+                            for f in available_prompts}
+            # Find current index
+            current_file = st.session_state.selected_prompt_file
+            if current_file in available_prompts:
+                default_index = available_prompts.index(current_file)
+            else:
+                default_index = 0 if available_prompts else 0
+            
+            selected_prompt_file = st.selectbox(
+                "Prompt File",
+                options=available_prompts,
+                index=default_index,
+                format_func=lambda x: prompt_options.get(x, x),
+                help="Select which prompt file to use. Edit the JSON file to modify the prompt.",
+                key="prompt_file_selector"
+            )
+            # Update session state
+            st.session_state.selected_prompt_file = selected_prompt_file
+            st.caption(f"📄 Using: {selected_prompt_file}")
+        else:
+            st.session_state.selected_prompt_file = None
+            st.warning("⚠️ No prompt files found. Using default prompt.")
+        
+        # Load prompt from selected JSON file
+        prompt_to_load = st.session_state.selected_prompt_file if st.session_state.selected_prompt_file else None
+        default_prompt = load_noura_prompt(prompt_to_load)
+        if default_prompt is None:
+            # Fallback to hardcoded prompt if JSON file doesn't exist
+            default_prompt = """
 You are Noura, a sales consultant at Tiger Balm call center in Saudi Arabia. Your mission: BUILD TRUST → ANSWER QUESTIONS → CLOSE THE SALE.
 
 ## CORE RULES
@@ -364,10 +539,62 @@ Always have it home. 90% choose 3-pack - smarter 💡 Reconsider?"
 - Confirm package before asking city
 - Add [LEAD_CONFIRMED] marker and STOP after city
 - Stay in character as helpful, knowledgeable Noura
-            """,
-            height=200,
-            help="Define how the AI should behave when responding to customers"
+            """
+        
+        current_prompt_file = st.session_state.selected_prompt_file if 'selected_prompt_file' in st.session_state else None
+        if current_prompt_file:
+            st.caption(f"💡 Edit {current_prompt_file} to update this prompt. Changes take effect after reloading the page.")
+        else:
+            st.caption("💡 Create a prompt JSON file (e.g., noura_lighter_watch_bundle_prompt.json) to customize. Changes take effect after reloading.")
+        
+        system_prompt = st.text_area(
+            "Customize AI Behavior",
+            value=default_prompt.strip() if default_prompt else "",
+            height=400,
+            help=f"Define how the AI should behave when responding to customers. Edit {current_prompt_file if current_prompt_file else 'prompt JSON file'} to change the default."
         )
+        
+        # File upload option to import new prompt
+        st.markdown("**📥 Import Prompt File (Optional)**")
+        uploaded_prompt = st.file_uploader(
+            "Upload a prompt JSON file",
+            type=['json'],
+            help="Upload a new prompt JSON file. It will be saved to the project directory.",
+            key="prompt_uploader"
+        )
+        
+        if uploaded_prompt is not None:
+            try:
+                # Read uploaded file
+                content = uploaded_prompt.read().decode('utf-8')
+                data = json.loads(content)
+                
+                # Validate it has system_prompt
+                if 'system_prompt' in data:
+                    # Save to project directory
+                    uploaded_filename = uploaded_prompt.name
+                    # Ensure it follows naming convention
+                    if not uploaded_filename.endswith('_prompt.json'):
+                        if uploaded_filename.endswith('.json'):
+                            uploaded_filename = uploaded_filename.replace('.json', '_prompt.json')
+                        else:
+                            uploaded_filename = f"noura_{uploaded_filename}_prompt.json"
+                    
+                    save_path = Path(uploaded_filename)
+                    with open(save_path, 'w', encoding='utf-8') as f:
+                        json.dump(data, f, ensure_ascii=False, indent=2)
+                    st.success(f"✅ Prompt file saved: {uploaded_filename}")
+                    
+                    # Update session state to use the new file
+                    st.session_state.selected_prompt_file = uploaded_filename
+                    st.info("🔄 Please reload the page to use the new prompt file.")
+                    st.rerun()
+                else:
+                    st.error("❌ Invalid prompt file. Must contain 'system_prompt' key.")
+            except json.JSONDecodeError as e:
+                st.error(f"❌ Invalid JSON file: {e}")
+            except Exception as e:
+                st.error(f"❌ Error importing prompt file: {e}")
 
     # Delay Settings
     with st.expander("⏱️ Rate Limiting"):
@@ -386,6 +613,69 @@ Always have it home. 90% choose 3-pack - smarter 💡 Reconsider?"
             value=40,
             help="Recommended: 40-50 messages"
         )
+    
+    # Follow-up (Relance) Settings
+    with st.expander("📬 Follow-up Messages (Relance)"):
+        st.info("Automatically send follow-up messages to customers who didn't respond after a set time.")
+        
+        followup_enabled = st.checkbox(
+            "Enable Follow-up Messages",
+            value=True,
+            help="Automatically send follow-up messages to customers who didn't respond"
+        )
+        
+        if followup_enabled:
+            followup_delay_minutes = st.slider(
+                "Follow-up Delay (minutes)",
+                min_value=15,
+                max_value=1440,  # 24 hours
+                value=60,
+                step=15,
+                help="How long to wait before sending a follow-up (e.g., 30 min, 60 min, 2 hours)"
+            )
+            
+            # Convert to hours for display
+            followup_delay_hours = followup_delay_minutes / 60
+            if followup_delay_hours >= 1:
+                st.caption(f"⏱️ Follow-up will be sent after {followup_delay_hours:.1f} hour(s)")
+            else:
+                st.caption(f"⏱️ Follow-up will be sent after {followup_delay_minutes} minute(s)")
+            
+            # Load follow-up message from JSON file
+            default_followup = load_followup_message()
+            if default_followup is None:
+                # Fallback to hardcoded message if JSON file doesn't exist
+                default_followup = """مرحباً {name}! 👋
+
+نشكرك على وقتك. نود أن نتأكد أنك رأيت عرضنا على Tiger Balm.
+
+هل لديك أي أسئلة؟ نحن هنا للمساعدة! 💬"""
+            
+            # Custom follow-up message
+            st.markdown("**Custom Follow-up Message (Optional)**")
+            st.caption("💡 Edit followup_message.json to update the default. Leave empty to use default from JSON.")
+            custom_followup = st.text_area(
+                "Follow-up Message Template",
+                value="",
+                height=100,
+                placeholder=f"Leave empty to use default from followup_message.json:\n\n{default_followup[:100]}...",
+                help="Custom message to send as follow-up. Leave empty to use default from followup_message.json. Use {name} and {phone} as placeholders."
+            )
+            
+            if custom_followup:
+                st.caption("✅ Custom follow-up message will be used")
+            else:
+                st.caption(f"ℹ️ Default follow-up message from followup_message.json will be used")
+        else:
+            followup_delay_minutes = 60  # Default value
+            custom_followup = ""
+            st.caption("❌ Follow-up messages are disabled")
+        
+        # Update bot settings if bot exists
+        if st.session_state.bot:
+            st.session_state.bot.followup_enabled = followup_enabled
+            st.session_state.bot.followup_delay_minutes = followup_delay_minutes
+            st.session_state.bot.followup_message_template = custom_followup if custom_followup else None
 
     st.divider()
 
@@ -409,11 +699,19 @@ Always have it home. 90% choose 3-pack - smarter 💡 Reconsider?"
             with st.spinner(spinner_text):
                 try:
                     # Initialize bot
+                    # Get selected state file from session state
+                    state_file_options_map = {
+                        "Default": "bot_state.json",
+                        "Smoking Clientele": "bot_state_smoking.json"
+                    }
+                    selected_state_file_name = state_file_options_map.get(st.session_state.get('selected_state_file', 'Smoking Clientele'), "bot_state_smoking.json")
+                    
                     st.session_state.bot = WhatsAppBot(
                         openai_api_key=openai_api_key if openai_api_key else None,
                         system_prompt=system_prompt,
                         headless=False,
-                        contacts_df=st.session_state.contacts_df
+                        contacts_df=st.session_state.contacts_df,
+                        state_file=selected_state_file_name
                     )
                     st.session_state.logged_in = True
                     success_msg = "✅ Bot reconnected! Check the browser window." if has_saved_session else "✅ Bot initialized! You should see WhatsApp Web in a browser window."
@@ -500,9 +798,11 @@ with tab1:
                     key="test_name"
                 )
 
-                test_message = st.text_area(
-                    "Test Message",
-                    value="""السلام عليكم {name} 👋
+                # Load initial message from JSON file for test
+                test_default_message = load_initial_message()
+                if test_default_message is None:
+                    # Fallback to hardcoded message if JSON file doesn't exist
+                    test_default_message = """السلام عليكم {name} 👋
 
 🐯 Tiger Balm الأصلي - عرض حصري محدود!
 
@@ -524,9 +824,13 @@ with tab1:
 
 ⚠️ العرض ينتهي قريباً - الكمية محدودة!
 
-تبي تستفيد من العرض؟""",
+تبي تستفيد من العرض؟"""
+                
+                test_message = st.text_area(
+                    "Test Message",
+                    value=test_default_message,
                     height=150,
-                    help="Write your test message. Use {name} to personalize.",
+                    help="Write your test message. Use {name} to personalize. Edit initial_message.json to change the default.",
                     key="test_message"
                 )
 
@@ -537,14 +841,17 @@ with tab1:
                     st.caption("💡 Add OpenAI API key to enable AI monitoring")
 
             with test_col2:
+                st.markdown("**📎 Test Media Files**")
+                st.caption("💡 Main media sent after customer responds. Second media (free product) sent immediately after.")
+                
                 test_media = st.file_uploader(
-                    "📎 Attach Media (Optional)",
+                    "📎 Main Media (Optional) - Sent after customer responds",
                     type=['jpg', 'jpeg', 'png', 'gif', 'mp4', 'avi', 'mov'],
-                    help="Upload an image or video to test media sending (max 500MB)",
+                    help="Upload main product media for testing (max 500MB)",
                     key="test_media"
                 )
 
-                # Save uploaded test media
+                # Save uploaded test main media
                 test_media_path = None
                 if test_media is not None:
                     try:
@@ -562,11 +869,43 @@ with tab1:
                                 with open(test_media_path, "wb") as f:
                                     f.write(test_media.getbuffer())
 
-                            st.success(f"✅ Media ready: {test_media.name} ({file_size_mb:.1f}MB)")
+                            st.success(f"✅ Main media ready: {test_media.name} ({file_size_mb:.1f}MB)")
                     except Exception as e:
                         st.error(f"❌ Error uploading media: {str(e)}")
                         st.info("💡 Try a smaller file or different format")
                         test_media_path = None
+                
+                # Second test media upload
+                test_media_2 = st.file_uploader(
+                    "🎁 Second Media - Free Product (Optional) - Sent after main media",
+                    type=['jpg', 'jpeg', 'png', 'gif', 'mp4', 'avi', 'mov'],
+                    help="Upload free product media for testing (max 500MB)",
+                    key="test_media_2"
+                )
+
+                # Save uploaded test second media
+                test_media_path_2 = None
+                if test_media_2 is not None:
+                    try:
+                        # Get file size in MB
+                        file_size_mb_2 = test_media_2.size / (1024 * 1024)
+
+                        if file_size_mb_2 > 500:
+                            st.error(f"❌ File too large: {file_size_mb_2:.1f}MB. Max: 500MB")
+                        else:
+                            temp_dir = Path("temp_media")
+                            temp_dir.mkdir(exist_ok=True)
+                            test_media_path_2 = temp_dir / f"test_{test_media_2.name}"
+
+                            with st.spinner(f"Uploading {test_media_2.name} ({file_size_mb_2:.1f}MB)..."):
+                                with open(test_media_path_2, "wb") as f:
+                                    f.write(test_media_2.getbuffer())
+
+                            st.success(f"✅ Free product media ready: {test_media_2.name} ({file_size_mb_2:.1f}MB)")
+                    except Exception as e:
+                        st.error(f"❌ Error uploading second media: {str(e)}")
+                        st.info("💡 Try a smaller file or different format")
+                        test_media_path_2 = None
 
                 # Preview
                 st.markdown("**Message Preview:**")
@@ -586,16 +925,21 @@ with tab1:
                         st.info("Try formats like: +966501234567, 0501234567, or 966501234567")
                     else:
                         st.info(f"📤 Sending test message to {formatted_phone}...")
+                        st.info("ℹ️ Test message: bot_state.json will not be used (reserved for real customers)")
 
                         try:
                             # Parse message with variables
                             final_message = parse_message_template(test_message, test_name, formatted_phone, "")
 
-                            # Send message
+                            # Send message using main bot instance with test_message=True
+                            # This skips bot_state.json operations for test messages
+                            # The main bot (test_mode=False) will still use bot_state.json for CSV bulk sending
                             success = st.session_state.bot.send_message(
                                 phone=formatted_phone,
                                 message=final_message,
-                                media_path=str(test_media_path) if test_media_path else None
+                                media_path=str(test_media_path) if test_media_path else None,
+                                media_path_2=str(test_media_path_2) if test_media_path_2 else None,
+                                test_message=True  # Skip bot_state.json for test messages
                             )
 
                             if success:
@@ -667,6 +1011,14 @@ with tab1:
                             # Filter out invalid phones
                             initial_count = len(cleaned_df)
                             cleaned_df = cleaned_df[cleaned_df['phone'].notna()]
+                            
+                            # Reset index to prevent index-related serialization issues
+                            cleaned_df = cleaned_df.reset_index(drop=True)
+                            
+                            # Ensure all columns are clean (convert to string for safety)
+                            for col in cleaned_df.columns:
+                                if cleaned_df[col].dtype == 'object':
+                                    cleaned_df[col] = cleaned_df[col].astype(str).fillna('')
 
                             st.success(f"✅ Cleaned {initial_count} records → {len(cleaned_df)} valid contacts")
                             st.info(f"📍 Removed {initial_count - len(cleaned_df)} records with invalid phone numbers")
@@ -703,12 +1055,23 @@ with tab1:
                                 # E-commerce format already cleaned
                                 df['phone_valid'] = df['phone'].notna()
                                 df['phone_formatted'] = df['phone']
+                            
+                            # Clean DataFrame to prevent serialization issues
+                            # Reset index and ensure all object columns are strings
+                            df = df.reset_index(drop=True)
+                            for col in df.columns:
+                                if df[col].dtype == 'object':
+                                    df[col] = df[col].fillna('').astype(str)
 
                             st.session_state.contacts_df = df
 
                             # Update bot's contacts_df if bot is already initialized
                             if st.session_state.bot:
                                 st.session_state.bot.contacts_df = df
+
+                            # Initialize selected contacts with all valid contacts (all selected by default)
+                            valid_contacts_df = df[df['phone_valid'] == True]
+                            st.session_state.selected_contacts = valid_contacts_df['phone_formatted'].tolist()
 
                             # Show preview
                             st.success(f"✅ Loaded {len(df)} contacts")
@@ -730,10 +1093,18 @@ with tab1:
                             if 'address' in df.columns:
                                 display_cols.insert(2, 'address')
 
-                            st.dataframe(
-                                df[display_cols].head(10),
-                                use_container_width=True
-                            )
+                            # Safely display DataFrame with error handling
+                            try:
+                                display_data = df[display_cols].head(10).copy()
+                                # Ensure all data is serializable
+                                display_data = display_data.fillna('')
+                                st.dataframe(
+                                    display_data,
+                                    use_container_width=True
+                                )
+                            except Exception as display_err:
+                                st.warning(f"⚠️ Could not display DataFrame preview: {display_err}")
+                                st.info("💡 The CSV file was loaded successfully, but preview display failed.")
 
                 except Exception as e:
                     st.error(f"❌ Error reading CSV: {str(e)}")
@@ -748,21 +1119,25 @@ with tab1:
                 'name': ['Ahmed', 'Fatima', 'Mohammed'],
                 'custom_message': ['Special offer for you!', '', 'Thanks for your support!']
             })
-            csv = sample_data.to_csv(index=False)
-            st.download_button(
-                label="⬇️ Download Sample CSV",
-                data=csv,
-                file_name="contacts_template.csv",
-                mime="text/csv"
-            )
+            try:
+                csv = sample_data.to_csv(index=False, encoding='utf-8')
+                st.download_button(
+                    label="⬇️ Download Sample CSV",
+                    data=csv,
+                    file_name="contacts_template.csv",
+                    mime="text/csv"
+                )
+            except Exception as csv_err:
+                st.error(f"⚠️ Error creating sample CSV: {csv_err}")
 
         with col2:
             st.subheader("💬 Compose Message")
 
-            # Message template
-            message_template = st.text_area(
-                "Message Template",
-                value="""السلام عليكم {name} 👋
+            # Load initial message from JSON file
+            default_message = load_initial_message()
+            if default_message is None:
+                # Fallback to hardcoded message if JSON file doesn't exist
+                default_message = """السلام عليكم {name} 👋
 
 🐯 Tiger Balm الأصلي - عرض حصري محدود!
 
@@ -784,19 +1159,29 @@ with tab1:
 
 ⚠️ العرض ينتهي قريباً - الكمية محدودة!
 
-تبي تستفيد من العرض؟""",
+تبي تستفيد من العرض؟"""
+            
+            st.caption("💡 Edit initial_message.json to update this template. Changes take effect after reloading the page.")
+            # Message template
+            message_template = st.text_area(
+                "Message Template",
+                value=default_message,
                 height=150,
-                help="Use {name}, {phone}, {custom_message} as placeholders"
+                help="Use {name}, {phone}, {custom_message} as placeholders. Edit initial_message.json to change the default."
             )
 
-            # Media upload
+            # Media upload - Main media (sent after customer responds)
+            st.markdown("**📎 Media Files**")
+            st.caption("💡 Main media will be sent when customer responds. Second media (free product) will be sent immediately after.")
+            
             media_file = st.file_uploader(
-                "📎 Attach Media (Optional)",
+                "📎 Main Media (Optional) - Sent after customer responds",
                 type=['jpg', 'jpeg', 'png', 'gif', 'mp4', 'avi', 'mov'],
-                help="Upload an image or video to send with your message (max 500MB)"
+                help="Upload main product media. This will be sent when the customer responds to your initial message (max 500MB)",
+                key="main_media"
             )
 
-            # Save uploaded media temporarily
+            # Save uploaded main media temporarily
             media_path = None
             if media_file is not None:
                 try:
@@ -815,11 +1200,44 @@ with tab1:
                             with open(media_path, "wb") as f:
                                 f.write(media_file.getbuffer())
 
-                        st.success(f"✅ Media attached: {media_file.name} ({file_size_mb:.1f}MB)")
+                        st.success(f"✅ Main media attached: {media_file.name} ({file_size_mb:.1f}MB)")
                 except Exception as e:
                     st.error(f"❌ Error uploading media: {str(e)}")
                     st.info("💡 Try a smaller file or different format")
                     media_path = None
+            
+            # Second media upload - Free product (sent immediately after main media)
+            media_file_2 = st.file_uploader(
+                "🎁 Second Media - Free Product (Optional) - Sent after main media",
+                type=['jpg', 'jpeg', 'png', 'gif', 'mp4', 'avi', 'mov'],
+                help="Upload free product media (e.g., electric ashtray). This will be sent immediately after the main media (max 500MB)",
+                key="second_media"
+            )
+
+            # Save uploaded second media temporarily
+            media_path_2 = None
+            if media_file_2 is not None:
+                try:
+                    # Get file size in MB
+                    file_size_mb_2 = media_file_2.size / (1024 * 1024)
+
+                    if file_size_mb_2 > 500:
+                        st.error(f"❌ File too large: {file_size_mb_2:.1f}MB. Max: 500MB")
+                    else:
+                        # Save to temp location
+                        temp_dir = Path("temp_media")
+                        temp_dir.mkdir(exist_ok=True)
+                        media_path_2 = temp_dir / media_file_2.name
+
+                        with st.spinner(f"Uploading {media_file_2.name} ({file_size_mb_2:.1f}MB)..."):
+                            with open(media_path_2, "wb") as f:
+                                f.write(media_file_2.getbuffer())
+
+                        st.success(f"✅ Free product media attached: {media_file_2.name} ({file_size_mb_2:.1f}MB)")
+                except Exception as e:
+                    st.error(f"❌ Error uploading second media: {str(e)}")
+                    st.info("💡 Try a smaller file or different format")
+                    media_path_2 = None
 
             # Preview message
             with st.expander("👁️ Preview Message"):
@@ -838,84 +1256,403 @@ with tab1:
 
             st.divider()
 
-            # Send messages button
+            # Contact Selection Section (Improved for large lists)
+            contacts_to_send = pd.DataFrame()  # Initialize empty DataFrame
+            
             if st.session_state.contacts_df is not None:
-                valid_contacts = st.session_state.contacts_df[st.session_state.contacts_df['phone_valid'] == True]
-
-                if len(valid_contacts) > max_messages_per_session:
-                    st.warning(f"⚠️ You have {len(valid_contacts)} valid contacts, but max limit is {max_messages_per_session}. Only the first {max_messages_per_session} will be sent.")
-                    contacts_to_send = valid_contacts.head(max_messages_per_session)
+                valid_contacts = st.session_state.contacts_df[st.session_state.contacts_df['phone_valid'] == True].copy()
+                
+                if len(valid_contacts) > 0:
+                    st.subheader("📋 Select Contacts to Send")
+                    
+                    # Initialize selected_contacts if empty (all selected by default)
+                    if not st.session_state.selected_contacts or len(st.session_state.selected_contacts) == 0:
+                        st.session_state.selected_contacts = valid_contacts['phone_formatted'].tolist()
+                    
+                    # Ensure selected_contacts only contains valid phone numbers
+                    valid_phones = set(valid_contacts['phone_formatted'].tolist())
+                    st.session_state.selected_contacts = [
+                        phone for phone in st.session_state.selected_contacts 
+                        if phone in valid_phones
+                    ]
+                    
+                    # Add a 'selected' column to the dataframe for easier filtering
+                    valid_contacts['selected'] = valid_contacts['phone_formatted'].isin(st.session_state.selected_contacts)
+                    
+                    # === FILTERING AND SEARCH SECTION ===
+                    st.markdown("### 🔍 Filter & Search Contacts")
+                    
+                    filter_col1, filter_col2, filter_col3 = st.columns(3)
+                    
+                    with filter_col1:
+                        # Search by name
+                        search_name = st.text_input(
+                            "🔎 Search by Name",
+                            value="",
+                            placeholder="Type name to search...",
+                            help="Filter contacts by name"
+                        )
+                    
+                    with filter_col2:
+                        # Search by phone
+                        search_phone = st.text_input(
+                            "📱 Search by Phone",
+                            value="",
+                            placeholder="Type phone to search...",
+                            help="Filter contacts by phone number"
+                        )
+                    
+                    with filter_col3:
+                        # Filter by selection status
+                        filter_selection = st.selectbox(
+                            "📊 Filter by Selection",
+                            options=["All", "Selected Only", "Unselected Only"],
+                            help="Show all, only selected, or only unselected contacts"
+                        )
+                    
+                    # Store current filter state to detect changes
+                    current_filters = f"{search_name}|{search_phone}|{filter_selection}"
+                    if 'last_filters' not in st.session_state:
+                        st.session_state.last_filters = ""
+                    
+                    # Reset page to 0 if filters changed
+                    if st.session_state.last_filters != current_filters:
+                        st.session_state.contact_page = 0
+                        st.session_state.last_filters = current_filters
+                    
+                    # Apply filters
+                    filtered_contacts = valid_contacts.copy()
+                    
+                    if search_name:
+                        filtered_contacts = filtered_contacts[
+                            filtered_contacts['name'].str.contains(search_name, case=False, na=False)
+                        ]
+                    
+                    if search_phone:
+                        filtered_contacts = filtered_contacts[
+                            filtered_contacts['phone_formatted'].str.contains(search_phone, case=False, na=False)
+                        ]
+                    
+                    if filter_selection == "Selected Only":
+                        filtered_contacts = filtered_contacts[filtered_contacts['selected'] == True]
+                    elif filter_selection == "Unselected Only":
+                        filtered_contacts = filtered_contacts[filtered_contacts['selected'] == False]
+                    
+                    # Get filtered count
+                    filtered_count = len(filtered_contacts)
+                    
+                    # Ensure page number is valid after filtering
+                    if filtered_count > 0:
+                        # Initialize items_per_page for max_page calculation (use default 100)
+                        items_per_page_default = 100
+                        max_page = (filtered_count - 1) // items_per_page_default
+                        if st.session_state.contact_page > max_page:
+                            st.session_state.contact_page = 0
+                    
+                    # === SELECTION SUMMARY ===
+                    total_valid = len(valid_contacts)
+                    total_selected = len(st.session_state.selected_contacts)
+                    total_unselected = total_valid - total_selected
+                    filtered_selected = filtered_contacts['selected'].sum() if filtered_count > 0 else 0
+                    
+                    col_sum1, col_sum2, col_sum3, col_sum4 = st.columns(4)
+                    with col_sum1:
+                        st.metric("Total Valid", total_valid)
+                    with col_sum2:
+                        st.metric("Selected", total_selected, delta=f"{total_selected/total_valid*100:.1f}%")
+                    with col_sum3:
+                        st.metric("Unselected", total_unselected)
+                    with col_sum4:
+                        st.metric("Filtered Results", filtered_count)
+                    
+                    # === BULK ACTIONS ===
+                    st.markdown("### ⚡ Bulk Actions")
+                    action_col1, action_col2, action_col3, action_col4, action_col5 = st.columns(5)
+                    
+                    with action_col1:
+                        if st.button("✅ Select All", use_container_width=True, help="Select all contacts (including filtered)"):
+                            st.session_state.selected_contacts = valid_contacts['phone_formatted'].tolist()
+                            st.rerun()
+                    
+                    with action_col2:
+                        if st.button("✅ Select Filtered", use_container_width=True, help="Select all filtered contacts"):
+                            filtered_phones = filtered_contacts['phone_formatted'].tolist()
+                            st.session_state.selected_contacts = list(set(st.session_state.selected_contacts + filtered_phones))
+                            st.rerun()
+                    
+                    with action_col3:
+                        if st.button("❌ Deselect All", use_container_width=True, help="Deselect all contacts"):
+                            st.session_state.selected_contacts = []
+                            st.rerun()
+                    
+                    with action_col4:
+                        if st.button("❌ Deselect Filtered", use_container_width=True, help="Deselect all filtered contacts"):
+                            filtered_phones = set(filtered_contacts['phone_formatted'].tolist())
+                            st.session_state.selected_contacts = [
+                                phone for phone in st.session_state.selected_contacts 
+                                if phone not in filtered_phones
+                            ]
+                            st.rerun()
+                    
+                    with action_col5:
+                        if st.button("🔄 Reset to All", use_container_width=True, help="Reset: Select all contacts"):
+                            st.session_state.selected_contacts = valid_contacts['phone_formatted'].tolist()
+                            st.rerun()
+                    
+                    st.divider()
+                    
+                    # === PAGINATED CONTACT TABLE ===
+                    if filtered_count > 0:
+                        st.markdown(f"### 📋 Contacts ({filtered_count} shown)")
+                        
+                        # Pagination controls
+                        items_per_page = st.slider(
+                            "Contacts per page",
+                            min_value=50,
+                            max_value=500,
+                            value=100,
+                            step=50,
+                            help="Number of contacts to display per page"
+                        )
+                        
+                        # Initialize page number in session state
+                        if 'contact_page' not in st.session_state:
+                            st.session_state.contact_page = 0
+                        
+                        total_pages = (filtered_count - 1) // items_per_page + 1
+                        current_page = st.session_state.contact_page
+                        
+                        # Page navigation
+                        nav_col1, nav_col2, nav_col3, nav_col4 = st.columns([1, 2, 2, 1])
+                        with nav_col1:
+                            if st.button("⬅️ Previous", disabled=current_page == 0, use_container_width=True):
+                                st.session_state.contact_page = max(0, current_page - 1)
+                                st.rerun()
+                        
+                        with nav_col2:
+                            page_input = st.number_input(
+                                "Page number",
+                                min_value=1,
+                                max_value=total_pages,
+                                value=current_page + 1,
+                                key="page_input",
+                                label_visibility="collapsed"
+                            )
+                            if page_input != current_page + 1:
+                                st.session_state.contact_page = page_input - 1
+                                st.rerun()
+                        
+                        with nav_col3:
+                            st.caption(f"Page {current_page + 1} of {total_pages} ({filtered_count} total)")
+                        
+                        with nav_col4:
+                            if st.button("Next ➡️", disabled=current_page >= total_pages - 1, use_container_width=True):
+                                st.session_state.contact_page = min(total_pages - 1, current_page + 1)
+                                st.rerun()
+                        
+                        # Get contacts for current page
+                        start_idx = current_page * items_per_page
+                        end_idx = min(start_idx + items_per_page, filtered_count)
+                        page_contacts = filtered_contacts.iloc[start_idx:end_idx]
+                        
+                        # Display contacts with checkboxes in a more compact format
+                        st.markdown("---")
+                        
+                        # Create a container for the contact list
+                        contacts_container = st.container()
+                        
+                        with contacts_container:
+                            # Display contacts in a compact table format
+                            # Use st.dataframe with a custom selection column for better performance
+                            
+                            # Create a display dataframe with selection status
+                            display_df = page_contacts[['name', 'phone_formatted']].copy()
+                            display_df['selected'] = display_df['phone_formatted'].isin(st.session_state.selected_contacts)
+                            display_df['select'] = False  # Placeholder for checkbox column
+                            
+                            # Display as a more compact format using st.columns for each row
+                            # This is more performant than individual checkboxes for large lists
+                            
+                            # Show table header
+                            header_col1, header_col2, header_col3 = st.columns([1, 4, 3])
+                            with header_col1:
+                                st.markdown("**Select**")
+                            with header_col2:
+                                st.markdown("**Name**")
+                            with header_col3:
+                                st.markdown("**Phone**")
+                            
+                            st.markdown("---")
+                            
+                            # Display contacts with checkboxes
+                            for row_idx, (idx, contact) in enumerate(page_contacts.iterrows()):
+                                phone = contact['phone_formatted']
+                                name = contact.get('name', 'Customer') or 'Customer'
+                                is_selected = phone in st.session_state.selected_contacts
+                                
+                                # Create a row
+                                col_chk, col_name, col_phone = st.columns([1, 4, 3])
+                                
+                                with col_chk:
+                                    # Unique checkbox key (use phone number directly, page and row for uniqueness)
+                                    # Replace special characters in phone for valid key
+                                    safe_phone = phone.replace('+', 'plus').replace('-', '_').replace(' ', '_')
+                                    checkbox_key = f"contact_checkbox_{safe_phone}_p{current_page}_r{row_idx}"
+                                    # Use contact name as label (hidden for cleaner UI, but required for accessibility)
+                                    checkbox_label = f"Select {name}"
+                                    checked = st.checkbox(
+                                        checkbox_label,
+                                        value=is_selected,
+                                        key=checkbox_key,
+                                        label_visibility="collapsed"
+                                    )
+                                    
+                                    # Update selection immediately if changed
+                                    if checked != is_selected:
+                                        if checked:
+                                            if phone not in st.session_state.selected_contacts:
+                                                st.session_state.selected_contacts.append(phone)
+                                        else:
+                                            if phone in st.session_state.selected_contacts:
+                                                st.session_state.selected_contacts.remove(phone)
+                                        # Rerun to update UI
+                                        st.rerun()
+                                
+                                with col_name:
+                                    # Show name with visual indicator
+                                    if is_selected:
+                                        st.markdown(f"✅ **{name}**")
+                                    else:
+                                        st.markdown(name)
+                                
+                                with col_phone:
+                                    st.text(phone)
+                        
+                        st.markdown("---")
+                        
+                        # Quick selection for current page
+                        page_action_col1, page_action_col2 = st.columns(2)
+                        with page_action_col1:
+                            if st.button(f"✅ Select All on This Page ({len(page_contacts)} contacts)", use_container_width=True):
+                                page_phones = page_contacts['phone_formatted'].tolist()
+                                st.session_state.selected_contacts = list(set(st.session_state.selected_contacts + page_phones))
+                                st.rerun()
+                        
+                        with page_action_col2:
+                            if st.button(f"❌ Deselect All on This Page ({len(page_contacts)} contacts)", use_container_width=True):
+                                page_phones = set(page_contacts['phone_formatted'].tolist())
+                                st.session_state.selected_contacts = [
+                                    phone for phone in st.session_state.selected_contacts 
+                                    if phone not in page_phones
+                                ]
+                                st.rerun()
+                    
+                    else:
+                        st.info("🔍 No contacts match your filters. Try adjusting your search criteria.")
+                    
+                    st.divider()
+                    
+                    # === FINAL SELECTION PROCESSING ===
+                    # Filter contacts based on final selection
+                    if len(st.session_state.selected_contacts) > 0:
+                        contacts_to_send = valid_contacts[valid_contacts['phone_formatted'].isin(st.session_state.selected_contacts)]
+                        
+                        # Apply max messages per session limit
+                        if len(contacts_to_send) > max_messages_per_session:
+                            st.warning(f"⚠️ You have {len(contacts_to_send)} selected contacts, but max limit is {max_messages_per_session}. Only the first {max_messages_per_session} will be sent.")
+                            contacts_to_send = contacts_to_send.head(max_messages_per_session)
+                    else:
+                        contacts_to_send = pd.DataFrame()  # Empty DataFrame
+                        
                 else:
-                    contacts_to_send = valid_contacts
+                    st.warning("⚠️ No valid contacts found in the CSV file")
 
+            # Send messages button
+            if st.session_state.contacts_df is not None and len(contacts_to_send) > 0:
                 if st.button(f"🚀 Send to {len(contacts_to_send)} Contacts", type="primary", disabled=len(contacts_to_send)==0):
                     progress_bar = st.progress(0)
                     status_text = st.empty()
                     results_container = st.container()
 
+                    # Set bulk sending flag to pause background monitoring
+                    if st.session_state.bot:
+                        st.session_state.bot.bulk_sending_active = True
+                        print("🔄 Bulk sending started - background monitoring paused")
+
                     sent_count = 0
                     failed_count = 0
 
-                    for idx, contact in contacts_to_send.iterrows():
-                        try:
-                            # Update progress
-                            progress = (sent_count + failed_count + 1) / len(contacts_to_send)
-                            progress_bar.progress(progress)
-                            status_text.text(f"Sending to {contact['name']} ({contact['phone_formatted']})...")
+                    try:
+                        for idx, contact in contacts_to_send.iterrows():
+                            try:
+                                # Update progress
+                                progress = (sent_count + failed_count + 1) / len(contacts_to_send)
+                                progress_bar.progress(progress)
+                                status_text.text(f"Sending to {contact['name']} ({contact['phone_formatted']})...")
 
-                            # Parse message
-                            message = parse_message_template(
-                                message_template,
-                                contact['name'],
-                                contact['phone_formatted'],
-                                contact.get('custom_message', '')
-                            )
+                                # Parse message
+                                message = parse_message_template(
+                                    message_template,
+                                    contact['name'],
+                                    contact['phone_formatted'],
+                                    contact.get('custom_message', '')
+                                )
 
-                            # Send message
-                            success = st.session_state.bot.send_message(
-                                phone=contact['phone_formatted'],
-                                message=message,
-                                media_path=str(media_path) if media_path else None
-                            )
+                                # Send message
+                                success = st.session_state.bot.send_message(
+                                    phone=contact['phone_formatted'],
+                                    message=message,
+                                    media_path=str(media_path) if media_path else None,
+                                    media_path_2=str(media_path_2) if media_path_2 else None
+                                )
 
-                            if success:
-                                sent_count += 1
-                                # Automatically add to monitoring
-                                auto_add_to_monitoring(contact['phone_formatted'])
-                                with results_container:
-                                    st.success(f"✅ Sent to {contact['name']} ({contact['phone_formatted']})")
-                            else:
+                                if success:
+                                    sent_count += 1
+                                    # Automatically add to monitoring
+                                    auto_add_to_monitoring(contact['phone_formatted'])
+                                    with results_container:
+                                        st.success(f"✅ Sent to {contact['name']} ({contact['phone_formatted']})")
+                                else:
+                                    failed_count += 1
+                                    with results_container:
+                                        st.error(f"❌ Failed to send to {contact['name']} ({contact['phone_formatted']})")
+
+                                # Delay between messages
+                                if sent_count + failed_count < len(contacts_to_send):
+                                    time.sleep(message_delay)
+
+                            except Exception as e:
                                 failed_count += 1
                                 with results_container:
-                                    st.error(f"❌ Failed to send to {contact['name']} ({contact['phone_formatted']})")
+                                    st.error(f"❌ Error sending to {contact['name']}: {str(e)}")
 
-                            # Delay between messages
-                            if sent_count + failed_count < len(contacts_to_send):
-                                time.sleep(message_delay)
+                        # Final summary
+                        progress_bar.progress(1.0)
+                        status_text.text("✅ Bulk messaging complete!")
 
-                        except Exception as e:
-                            failed_count += 1
-                            with results_container:
-                                st.error(f"❌ Error sending to {contact['name']}: {str(e)}")
+                        st.divider()
+                        col_a, col_b, col_c = st.columns(3)
+                        with col_a:
+                            st.metric("Total Sent", sent_count)
+                        with col_b:
+                            st.metric("Failed", failed_count)
+                        with col_c:
+                            success_rate = (sent_count / len(contacts_to_send) * 100) if len(contacts_to_send) > 0 else 0
+                            st.metric("Success Rate", f"{success_rate:.1f}%")
 
-                    # Final summary
-                    progress_bar.progress(1.0)
-                    status_text.text("✅ Bulk messaging complete!")
-
-                    st.divider()
-                    col_a, col_b, col_c = st.columns(3)
-                    with col_a:
-                        st.metric("Total Sent", sent_count)
-                    with col_b:
-                        st.metric("Failed", failed_count)
-                    with col_c:
-                        success_rate = (sent_count / len(contacts_to_send) * 100) if len(contacts_to_send) > 0 else 0
-                        st.metric("Success Rate", f"{success_rate:.1f}%")
-
-                    # Update session stats
-                    st.session_state.message_stats['sent'] += sent_count
-                    st.session_state.message_stats['failed'] += failed_count
-                    st.session_state.message_stats['total'] += len(contacts_to_send)
+                        # Update session stats
+                        st.session_state.message_stats['sent'] += sent_count
+                        st.session_state.message_stats['failed'] += failed_count
+                        st.session_state.message_stats['total'] += len(contacts_to_send)
+                    finally:
+                        # Always reset bulk sending flag, even if there was an error
+                        if st.session_state.bot:
+                            st.session_state.bot.bulk_sending_active = False
+                            print("✅ Bulk sending finished - background monitoring resumed")
+            elif st.session_state.contacts_df is not None:
+                # Contacts loaded but none selected or no valid contacts
+                if len(contacts_to_send) == 0:
+                    st.info("📋 Select at least one contact to send messages")
             else:
                 st.info("📋 Upload a CSV file to get started")
 
@@ -1360,14 +2097,47 @@ with tab4:
             if len(filtered_leads) > 0:
                 # Convert to DataFrame for better display
                 import pandas as pd
-                df_leads = pd.DataFrame(filtered_leads)
-
-                # Display table
-                st.dataframe(
-                    df_leads,
-                    use_container_width=True,
-                    hide_index=True
-                )
+                try:
+                    df_leads = pd.DataFrame(filtered_leads)
+                    # Reset index to prevent index-related serialization issues
+                    df_leads = df_leads.reset_index(drop=True)
+                    
+                    # Clean DataFrame to prevent serialization issues
+                    # Fill NaN values and ensure all object columns are strings
+                    for col in df_leads.columns:
+                        if df_leads[col].dtype == 'object':
+                            df_leads[col] = df_leads[col].fillna('').astype(str)
+                        else:
+                            df_leads[col] = df_leads[col].fillna('')
+                    
+                    # Display table with error handling to prevent recursion errors
+                    try:
+                        st.dataframe(
+                            df_leads,
+                            use_container_width=True,
+                            hide_index=True
+                        )
+                    except RecursionError:
+                        st.error("⚠️ Recursion error displaying table. This is a known pandas/Streamlit issue.")
+                        st.info("💡 Try filtering the leads or use the download button instead.")
+                        # Show simple text table instead
+                        st.markdown("**Leads List (simple view):**")
+                        for lead in filtered_leads[:50]:  # Show first 50
+                            st.text(f"{lead.get('phone', 'N/A')} - {lead.get('product_confirmed', 'N/A')} - {lead.get('status', 'N/A')}")
+                        if len(filtered_leads) > 50:
+                            st.caption(f"... and {len(filtered_leads) - 50} more leads")
+                    except Exception as display_err:
+                        st.error(f"⚠️ Error displaying leads table: {display_err}")
+                        st.info("💡 Leads data is loaded, but table display failed. Try downloading the CSV instead.")
+                except RecursionError:
+                    st.error("⚠️ Recursion error creating DataFrame. There may be an issue with the leads data.")
+                    st.info("💡 Try clearing the leads file or checking for corrupted data.")
+                    # Prevent infinite rerun
+                    import sys
+                    sys.setrecursionlimit(1000)  # Reset recursion limit
+                except Exception as df_err:
+                    st.error(f"⚠️ Error creating DataFrame: {df_err}")
+                    st.info("💡 There might be an issue with the leads data structure.")
 
                 st.divider()
 
@@ -1404,10 +2174,29 @@ with tab4:
 
                 import io
 
-                # Create CSV string
-                csv_buffer = io.StringIO()
-                df_leads.to_csv(csv_buffer, index=False)
-                csv_string = csv_buffer.getvalue()
+                # Create CSV string with error handling (use filtered_leads directly to avoid DataFrame issues)
+                csv_string = ""
+                try:
+                    # Use Python's csv module instead of pandas to avoid recursion issues
+                    import csv as csv_module
+                    csv_buffer = io.StringIO()
+                    if filtered_leads:
+                        # Get fieldnames from first lead
+                        fieldnames = list(filtered_leads[0].keys())
+                        writer = csv_module.DictWriter(csv_buffer, fieldnames=fieldnames)
+                        writer.writeheader()
+                        for lead in filtered_leads:
+                            # Ensure all values are strings and handle None values
+                            clean_lead = {k: str(v) if v is not None else '' for k, v in lead.items()}
+                            writer.writerow(clean_lead)
+                    csv_string = csv_buffer.getvalue()
+                except RecursionError:
+                    st.error("⚠️ Recursion error creating CSV export. This is a pandas/Streamlit compatibility issue.")
+                    st.info("💡 The leads data is loaded, but CSV export failed due to a technical issue.")
+                    csv_string = ""  # Empty CSV if export fails
+                except Exception as csv_err:
+                    st.error(f"⚠️ Error creating CSV export: {csv_err}")
+                    csv_string = ""  # Empty CSV if export fails
 
                 st.download_button(
                     label="⬇️ Download Leads CSV",
